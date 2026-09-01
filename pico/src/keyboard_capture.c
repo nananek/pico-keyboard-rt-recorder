@@ -10,6 +10,15 @@ void pico_keyboard_capture_init(pico_keyboard_capture_t *capture) {
     memset(capture, 0, sizeof(*capture));
 }
 
+void pico_keyboard_capture_clear(pico_keyboard_capture_t *capture) {
+    if (capture == NULL) {
+        return;
+    }
+    capture->read_index = 0u;
+    capture->write_index = 0u;
+    capture->count = 0u;
+}
+
 bool pico_keyboard_capture_push(
     pico_keyboard_capture_t *capture,
     uint64_t timestamp_us,

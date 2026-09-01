@@ -7,6 +7,7 @@
 
 typedef struct {
     pico_keyboard_capture_t *capture;
+    pico_mode_state_t *mode;
     bool mounted;
     uint8_t dev_addr;
     uint8_t instance;
@@ -22,9 +23,12 @@ static void request_next_report(uint8_t dev_addr, uint8_t instance) {
     }
 }
 
-void pico_hid_keyboard_host_init(pico_keyboard_capture_t *capture) {
+void pico_hid_keyboard_host_init(
+    pico_keyboard_capture_t *capture,
+    pico_mode_state_t *mode) {
     memset(&host_state, 0, sizeof(host_state));
     host_state.capture = capture;
+    host_state.mode = mode;
 
     // TinyUSB applies this while enumerating every Boot-subclass interface.
     // Calling it before host initialization makes the wire report format an
@@ -92,8 +96,11 @@ void tuh_hid_report_received_cb(
     }
 
     ++host_state.stats.report_callbacks;
-    pico_keyboard_capture_push(
-        host_state.capture, timestamp_us, report, report_len);
+    if (host_state.mode == NULL ||
+        pico_mode_state_accepts_physical(host_state.mode)) {
+        pico_keyboard_capture_push(
+            host_state.capture, timestamp_us, report, report_len);
+    }
 
     // Malformed reports are rejected by capture, but reception is still
     // re-armed so one bad transfer cannot permanently stop the keyboard.

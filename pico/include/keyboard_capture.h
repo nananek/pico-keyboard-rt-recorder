@@ -34,6 +34,7 @@ typedef struct {
 } pico_keyboard_capture_t;
 
 void pico_keyboard_capture_init(pico_keyboard_capture_t *capture);
+void pico_keyboard_capture_clear(pico_keyboard_capture_t *capture);
 
 // Records every valid report, including duplicates and all-zero releases.
 // Returns false for invalid input or when the bounded handoff is full.

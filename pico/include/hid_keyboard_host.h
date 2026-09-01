@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "keyboard_capture.h"
+#include "mode_state.h"
 
 typedef struct {
     uint32_t keyboard_mounts;
@@ -17,7 +18,9 @@ typedef struct {
 
 // Must run before the TinyUSB host stack is initialized so Boot protocol is
 // selected during HID enumeration.
-void pico_hid_keyboard_host_init(pico_keyboard_capture_t *capture);
+void pico_hid_keyboard_host_init(
+    pico_keyboard_capture_t *capture,
+    pico_mode_state_t *mode);
 
 bool pico_hid_keyboard_host_is_mounted(void);
 

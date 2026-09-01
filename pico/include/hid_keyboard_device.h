@@ -7,8 +7,8 @@
 
 #include "hid_boot_keyboard.h"
 
-// The transport boundary accepts a length even though version 1 validates the
-// fixed 8-byte Boot Keyboard size. Future HID descriptor versions can extend
+// The transport boundary accepts a length even though protocol version 2
+// validates the fixed 8-byte Boot Keyboard size. Future HID descriptor versions can extend
 // the accepted length without changing callers or the scheduler boundary.
 bool pico_hid_keyboard_send_report(const uint8_t *report, size_t report_len);
 

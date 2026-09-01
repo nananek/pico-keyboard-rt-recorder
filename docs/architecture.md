@@ -1,78 +1,36 @@
 # Architecture
 
-## Responsibility boundary
+## Ownership boundary
+
+The Pico 2 is the real-time engine: TinyUSB device and PIO-USB host, physical
+report timestamps, pass-through, playback queue, USB output, and safety state.
+The Pi Zero 2 W stores recordings, prepares absolute future offsets, feeds the
+queue, and presents the control UI. The Zero never supplies a playback clock.
+
+The only control link is framed binary UART0 (Pico GP0 TX / GP1 RX, 460800
+8-N-1). Mode selection is a `MODE_SET (0x87)` command; no GPIO gate is used.
+
+## Data flow
 
 ```text
-Pico 2 — Real-time domain             Pi Zero 2 W — Control/storage domain
---------------------------------      -------------------------------------
-USB keyboard host                      Recording persistence
-USB HID keyboard device                Sequence management
-Pico capture timestamps                Future-event preparation
-Pass-through                           UART transport and flow control
-Playback ring buffer                   GPIO mode control
-Hardware-timer deadline scheduler      HTTP/WebSocket API and web UI
-Safety state machine                   Rename/delete/loop/speed features
+USB keyboard -> PIO-USB host -> host callback timestamp
+                                  |-> bounded physical queue
+                                  |       |-> PASS: native HID device -> PC
+                                  |       `-> RECORD: RECORD_EVENT -> UART -> Zero
+Zero UART MODE_SET/PLAY_* -> RX IRQ -> byte ring -> main parser -> state/queue
 ```
 
-The boundary is intentional: a Linux scheduling delay, Python pause, disk stall, or UART transmit delay must not affect a playback deadline already queued on Pico.
+The UART IRQ drains hardware FIFO bytes and records hardware faults only. It
+does not parse frames, allocate, call TinyUSB, or mutate mode. The main loop
+performs magic/version/length/CRC/type checks, queues validated commands, and
+executes state transitions. TX is also a non-blocking ring drained by the main
+loop when UART space is available.
 
-## Phase 2 USB host capture
+## Safety
 
-The native RP2350 USB controller is TinyUSB root hub 0 in device mode. The
-Pico-PIO-USB controller on GP12 D+ / GP13 D- is root hub 1 in host mode. Both
-TinyUSB tasks currently run on Pico core 0; host callbacks only copy a raw
-8-byte report plus the callback-entry `time_us_64()` value into a bounded local
-handoff. The opt-in UART diagnostic drains that handoff later, so formatting and
-transport time cannot replace the capture timestamp.
-
-GP2 is initialized as the raw mode-gate input with a pull-down, but Phase 2
-does not implement PASS/ARMED/PLAYING transitions. It is distinct from UART0
-GP0/GP1 and PIO-USB GP12/GP13, preserving GPIO ownership and timing
-responsibility without using the official Pico 2's reserved GP29 VSYS monitor.
-
-## Data paths
-
-### PASS
-
-```text
-Physical keyboard -> Pico USB host -> Pico timestamp -> UART -> Zero storage
-                                      `-> USB HID device -> PC
-```
-
-Pico always captures the timestamp. Zero may decide whether to persist an event, but it does not reinterpret its time.
-
-### ARMED and PLAYING
-
-```text
-Zero recording -> offsets from Pico epoch -> UART -> Pico ring buffer
-                                                Pico hardware alarm -> USB HID -> PC
-Physical keyboard ---------------------------------------------------X
-```
-
-Zero queues events in advance. Pico creates the epoch at `PLAY_START` and executes the queued reports against that epoch.
-
-## State machine
-
-```text
-              GPIO HIGH
-PASS ----------------------> ARMED
- ^                              |
- | GPIO LOW                     | PLAY_START
- +------------------------------+----> PLAYING
-                                      |  ^
-                         END/ABORT ---+  |
-                                      |  |
-                              underrun/error
-                                      v
-                                    ERROR
-                                      |
-                                   GPIO LOW
-                                      v
-                                    PASS
-```
-
-`GPIO LOW` has priority from every non-PASS state. It cancels playback, clears state, sends all keys released, and returns to `PASS`.
-
-## Queue ownership
-
-Pico owns a fixed-capacity ring buffer (initial target: 256 events). Zero sends only within advertised capacity or credits. Queue state and end-of-sequence are explicit protocol state; an empty queue during a non-ended playback is an underrun.
+PASS forwards physical reports. RECORD captures reports and does not forward
+them. ARMED and PLAYING block physical input. PASS from any state cancels stale
+physical data, sends all-keys-release, and waits for a fresh host report.
+Malformed frames, ring overflow, and UART hardware errors enter ERROR outside
+PASS; ERROR blocks input until a valid `MODE_SET(PASS)` recovers it. Every
+transition is acknowledged with `MODE_CHANGED(state, reason)`.

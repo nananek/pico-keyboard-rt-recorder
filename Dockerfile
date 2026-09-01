@@ -35,8 +35,8 @@ ENV PICO_SDK_PATH=/opt/pico-sdk
 WORKDIR /workspace
 COPY pico ./pico
 
-# First run hardware-independent pin/report/capture/host-adapter tests, then
-# build every Pico 2 firmware configuration. No step needs attached hardware.
+# First run hardware-independent pin/report/UART/mode/host-adapter tests, then
+# build the Pico 2 firmware configurations. No step needs attached hardware.
 RUN sh pico/tests/run-host-tests.sh
 RUN cmake -S pico -B /tmp/pico-build -G Ninja \
         -DPICO_BOARD=pico2 \
@@ -52,19 +52,9 @@ RUN cmake -S pico -B /tmp/pico-build-demo -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
     && cmake --build /tmp/pico-build-demo --target pico_keyboard_hid
 
-# The capture diagnostic emits receive-boundary timestamps and raw reports on
-# UART0. Compile it separately so acceptance-only code is covered by CI while
-# the normal firmware remains free of textual diagnostic traffic.
-RUN cmake -S pico -B /tmp/pico-build-capture -G Ninja \
-        -DPICO_BOARD=pico2 \
-        -DPICO_HID_HOST_CAPTURE_TEST=ON \
-        -DCMAKE_BUILD_TYPE=Release \
-    && cmake --build /tmp/pico-build-capture --target pico_keyboard_hid
-
 # A successful final stage exposes the UF2 as the build result. The CI job only
 # needs `docker build --target verify`; a non-zero test or firmware build fails
 # before this stage is produced.
 FROM scratch AS verify
 COPY --from=pico-builder /tmp/pico-build/pico_keyboard_hid.uf2 /pico_keyboard_hid.uf2
 COPY --from=pico-builder /tmp/pico-build-demo/pico_keyboard_hid.uf2 /pico_keyboard_hid_demo.uf2
-COPY --from=pico-builder /tmp/pico-build-capture/pico_keyboard_hid.uf2 /pico_keyboard_hid_capture.uf2

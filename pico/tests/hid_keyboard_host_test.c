@@ -25,6 +25,7 @@ static uint32_t receive_calls;
 static uint8_t last_receive_dev_addr;
 static uint8_t last_receive_instance;
 static uint64_t fake_timestamp_us;
+static pico_mode_state_t mode;
 
 #define CHECK(condition)                                                        \
     do {                                                                        \
@@ -65,7 +66,8 @@ static void reset_fakes(pico_keyboard_capture_t *capture) {
     last_receive_instance = 0u;
     fake_timestamp_us = 0u;
     pico_keyboard_capture_init(capture);
-    pico_hid_keyboard_host_init(capture);
+    pico_mode_state_init(&mode, NULL);
+    pico_hid_keyboard_host_init(capture, &mode);
 }
 
 static void test_only_keyboard_mount_is_armed_in_boot_protocol(void) {
@@ -150,9 +152,23 @@ static void test_receive_errors_and_unmount_clear_state(void) {
     CHECK(stats.keyboard_unmounts == 1u);
 }
 
+static void test_mode_blocks_host_capture(void) {
+    pico_keyboard_capture_t capture;
+    const uint8_t report[PICO_HID_BOOT_KEYBOARD_REPORT_LEN] = {0u};
+    reset_fakes(&capture);
+    fake_protocol = HID_ITF_PROTOCOL_KEYBOARD;
+    tuh_hid_mount_cb(1u, 0u, NULL, 0u);
+    CHECK(pico_mode_state_handle_mode_set(&mode, PICO_UART_MODE_ARMED));
+    tuh_hid_report_received_cb(1u, 0u, report, sizeof(report));
+    pico_keyboard_capture_event_t event;
+    CHECK(!pico_keyboard_capture_pop(&capture, &event));
+    CHECK(pico_mode_state_handle_mode_set(&mode, PICO_UART_MODE_PASS));
+}
+
 int main(void) {
     test_only_keyboard_mount_is_armed_in_boot_protocol();
     test_callback_captures_entry_timestamp_and_always_rearms();
     test_receive_errors_and_unmount_clear_state();
+    test_mode_blocks_host_capture();
     return failures == 0 ? 0 : 1;
 }

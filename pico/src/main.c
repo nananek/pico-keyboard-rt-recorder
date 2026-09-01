@@ -1,59 +1,107 @@
 #include "bsp/board.h"
-#include <stdio.h>
 
-#include "hardware/gpio.h"
-#include "hardware/uart.h"
+#include <string.h>
+
 #include "pico/stdlib.h"
+#include "pico/time.h"
 #include "tusb.h"
 
-#include "hardware_config.h"
-#include "hid_boot_keyboard.h"
 #include "hid_keyboard_device.h"
 #include "hid_keyboard_host.h"
+#include "hid_boot_keyboard.h"
+#include "hardware_config.h"
 #include "keyboard_capture.h"
+#include "mode_state.h"
+#include "uart_protocol.h"
+#include "uart_transport.h"
 
 static pico_keyboard_capture_t keyboard_capture;
+static pico_uart_transport_t uart_transport;
+static pico_mode_state_t mode_state;
 
-static void mode_gate_init(void) {
-    // GP2 is distinct from UART0 GP0/GP1 and PIO-USB GP12/GP13. The pull-down
-    // makes loss of the Pi Zero drive resolve to LOW/PASS.
-    gpio_init(PICO_KEYBOARD_MODE_GPIO);
-    gpio_set_dir(PICO_KEYBOARD_MODE_GPIO, GPIO_IN);
-    gpio_pull_down(PICO_KEYBOARD_MODE_GPIO);
+static void mode_all_release(void *user) {
+    (void)user;
+    (void)pico_hid_keyboard_send_all_keys_release();
 }
 
-#if PICO_HID_HOST_CAPTURE_TEST
-static void capture_diagnostic_init(void) {
-    uart_init(uart0, 115200u);
-    gpio_set_function(PICO_KEYBOARD_UART_TX_GPIO, GPIO_FUNC_UART);
-    gpio_set_function(PICO_KEYBOARD_UART_RX_GPIO, GPIO_FUNC_UART);
+static void mode_clear_physical(void *user) {
+    (void)user;
+    pico_keyboard_capture_clear(&keyboard_capture);
 }
 
-static void capture_diagnostic_task(void) {
+static void mode_changed(void *user, uint8_t state, uint8_t reason) {
+    pico_uart_transport_t *transport = (pico_uart_transport_t *)user;
+    const uint8_t payload[2] = {state, reason};
+    (void)pico_uart_transport_queue_frame(
+        transport, PICO_UART_MODE_CHANGED, payload, sizeof(payload));
+}
+
+static void send_record_event(const pico_keyboard_capture_event_t *event) {
+    uint8_t payload[17];
+    uint64_t timestamp = event->timestamp_us;
+    for (unsigned i = 0; i < 8u; ++i) {
+        payload[i] = (uint8_t)(timestamp & 0xFFu);
+        timestamp >>= 8;
+    }
+    payload[8] = event->report_len;
+    memcpy(payload + 9u, &event->report, sizeof(event->report));
+    (void)pico_uart_transport_queue_frame(
+        &uart_transport, PICO_UART_RECORD_EVENT, payload, sizeof(payload));
+}
+
+static void drain_physical_reports(void) {
     pico_keyboard_capture_event_t event;
-    char line[128];
-
     while (pico_keyboard_capture_pop(&keyboard_capture, &event)) {
-        const int count = snprintf(
-            line,
-            sizeof(line),
-            "CAPTURE %llu %u %02x %02x %02x %02x %02x %02x %02x %02x\r\n",
-            (unsigned long long)event.timestamp_us,
-            event.report_len,
-            event.report.modifier,
-            event.report.reserved,
-            event.report.keycode[0],
-            event.report.keycode[1],
-            event.report.keycode[2],
-            event.report.keycode[3],
-            event.report.keycode[4],
-            event.report.keycode[5]);
-        if (count > 0 && (size_t)count < sizeof(line)) {
-            uart_write_blocking(uart0, (const uint8_t *)line, (size_t)count);
+        if (pico_mode_state_is_recording(&mode_state)) {
+            send_record_event(&event);
+        } else if (pico_mode_state_get(&mode_state) == PICO_UART_MODE_PASS) {
+            (void)pico_hid_keyboard_send_boot_report(&event.report);
         }
     }
 }
-#endif
+
+static void send_status(void) {
+    const pico_uart_transport_stats_t stats =
+        pico_uart_transport_get_stats(&uart_transport);
+    const uint8_t payload[5] = {
+        pico_mode_state_get(&mode_state),
+        (uint8_t)(stats.rx_overflow != 0u),
+        (uint8_t)(stats.hardware_errors != 0u),
+        (uint8_t)(stats.invalid_frames != 0u),
+        (uint8_t)(stats.tx_dropped != 0u),
+    };
+    (void)pico_uart_transport_queue_frame(
+        &uart_transport, PICO_UART_PICO_STATUS, payload, sizeof(payload));
+}
+
+static void dispatch_command(const pico_uart_frame_t *frame) {
+    switch (frame->type) {
+        case PICO_UART_MODE_SET:
+            (void)pico_mode_state_handle_mode_set(&mode_state, frame->payload[0]);
+            break;
+        case PICO_UART_PLAY_START:
+            (void)pico_mode_state_play_start(&mode_state);
+            break;
+        case PICO_UART_PLAY_ABORT:
+            (void)pico_mode_state_play_abort(&mode_state);
+            break;
+        case PICO_UART_PING:
+            (void)pico_uart_transport_queue_frame(
+                &uart_transport, PICO_UART_PONG, frame->payload,
+                frame->payload_len);
+            break;
+        case PICO_UART_STATUS_REQUEST:
+            send_status();
+            break;
+        case PICO_UART_QUEUE_CLEAR:
+        case PICO_UART_QUEUE_EVENT:
+        case PICO_UART_QUEUE_END:
+        default:
+            /* Playback queue support is intentionally not enabled yet. */
+            pico_mode_state_protocol_error(&mode_state);
+            break;
+    }
+}
 
 #if PICO_HID_DEMO_TEST
 static void hid_demo_test_task(void) {
@@ -65,22 +113,19 @@ static void hid_demo_test_task(void) {
     static uint8_t stage = HID_DEMO_WAIT_FOR_ENDPOINT;
     static uint32_t release_at_ms;
 
-    if (stage == HID_DEMO_COMPLETE || !tud_mounted()) {
+    if (stage == HID_DEMO_COMPLETE || !tud_mounted() ||
+        pico_mode_state_get(&mode_state) != PICO_UART_MODE_PASS) {
         return;
     }
-
     if (stage == HID_DEMO_WAIT_FOR_ENDPOINT) {
         pico_hid_boot_keyboard_report_t press_report;
-        pico_hid_boot_keyboard_make_key_press(
-            &press_report, 0u, PICO_HID_USAGE_KEY_A);
-
+        pico_hid_boot_keyboard_make_key_press(&press_report, 0u, PICO_HID_USAGE_KEY_A);
         if (pico_hid_keyboard_send_boot_report(&press_report)) {
             release_at_ms = to_ms_since_boot(get_absolute_time()) + 50u;
             stage = HID_DEMO_WAIT_TO_RELEASE;
         }
         return;
     }
-
     const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
     if ((int32_t)(now_ms - release_at_ms) >= 0 &&
         pico_hid_keyboard_send_all_keys_release()) {
@@ -91,13 +136,17 @@ static void hid_demo_test_task(void) {
 
 int main(void) {
     board_init();
-    mode_gate_init();
     pico_keyboard_capture_init(&keyboard_capture);
-    pico_hid_keyboard_host_init(&keyboard_capture);
-
-#if PICO_HID_HOST_CAPTURE_TEST
-    capture_diagnostic_init();
-#endif
+    pico_uart_transport_init(&uart_transport);
+    const pico_mode_state_callbacks_t callbacks = {
+        .all_release = mode_all_release,
+        .clear_physical = mode_clear_physical,
+        .mode_changed = mode_changed,
+        .user = &uart_transport,
+    };
+    pico_mode_state_init(&mode_state, &callbacks);
+    pico_hid_keyboard_host_init(&keyboard_capture, &mode_state);
+    pico_uart_transport_hw_init(&uart_transport);
 
     const tusb_rhport_init_t device_init = {
         .role = TUSB_ROLE_DEVICE,
@@ -107,7 +156,6 @@ int main(void) {
         .role = TUSB_ROLE_HOST,
         .speed = TUSB_SPEED_FULL,
     };
-
     if (!tusb_init(PICO_KEYBOARD_NATIVE_DEVICE_RHPORT, &device_init)) {
         panic("TinyUSB native device initialization failed");
     }
@@ -118,17 +166,19 @@ int main(void) {
     while (true) {
         tud_task();
         tuh_task();
-
+        pico_uart_transport_poll(&uart_transport);
+        if (pico_uart_transport_take_fault(&uart_transport)) {
+            pico_mode_state_uart_fault(&mode_state);
+        }
+        pico_uart_frame_t command;
+        while (pico_uart_transport_pop_command(&uart_transport, &command)) {
+            dispatch_command(&command);
+        }
+        drain_physical_reports();
+        pico_uart_transport_tx_task(&uart_transport);
 #if PICO_HID_DEMO_TEST
         hid_demo_test_task();
 #endif
-
-#if PICO_HID_HOST_CAPTURE_TEST
-        capture_diagnostic_task();
-#endif
-
-        // USB work is poll-driven on one core in this phase. Playback
-        // scheduling will add a Pico hardware alarm in its own phase.
         sleep_ms(1u);
     }
 }
@@ -139,11 +189,7 @@ uint16_t tud_hid_get_report_cb(
     hid_report_type_t report_type,
     uint8_t *buffer,
     uint16_t reqlen) {
-    (void)instance;
-    (void)report_id;
-    (void)report_type;
-    (void)buffer;
-    (void)reqlen;
+    (void)instance; (void)report_id; (void)report_type; (void)buffer; (void)reqlen;
     return 0;
 }
 
@@ -153,11 +199,5 @@ void tud_hid_set_report_cb(
     hid_report_type_t report_type,
     const uint8_t *buffer,
     uint16_t bufsize) {
-    // Version 1 does not use host keyboard LED output reports yet. Consume the
-    // callback so an OS may still issue its normal HID class requests.
-    (void)instance;
-    (void)report_id;
-    (void)report_type;
-    (void)buffer;
-    (void)bufsize;
+    (void)instance; (void)report_id; (void)report_type; (void)buffer; (void)bufsize;
 }

@@ -30,9 +30,23 @@ build_and_run keyboard_capture \
     "$test_root/../src/keyboard_capture.c" \
     "$test_root/keyboard_capture_test.c"
 
+build_and_run uart_protocol \
+    "$test_root/../src/uart_protocol.c" \
+    "$test_root/uart_protocol_test.c"
+
+build_and_run uart_transport \
+    "$test_root/../src/uart_protocol.c" \
+    "$test_root/../src/uart_transport.c" \
+    "$test_root/uart_transport_test.c"
+
+build_and_run mode_state \
+    "$test_root/../src/mode_state.c" \
+    "$test_root/mode_state_test.c"
+
 "$compiler" -std=c11 -Wall -Wextra -Werror \
     -I"$test_root/stubs" -I"$include_root" \
     "$test_root/../src/keyboard_capture.c" \
+    "$test_root/../src/mode_state.c" \
     "$test_root/../src/hid_keyboard_host.c" \
     "$test_root/hid_keyboard_host_test.c" \
     -o "$test_directory/hid_keyboard_host"

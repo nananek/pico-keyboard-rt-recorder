@@ -1,20 +1,25 @@
-# UART protocol (version 1)
+# UART protocol (version 2)
+
+The Pico 2 and Pi Zero 2 W communicate over UART0 at 460800 baud, 8-N-1.
+Pico UART0 TX is GP0 and RX is GP1. The mode is controlled only by framed UART
+commands; there is no separate mode-control wire.
 
 ## Framing
 
-All UART messages use little-endian multi-byte integer fields.
+All multi-byte fields are little-endian.
 
 ```text
 +---------+---------+---------+----------+-------------+---------+
 | MAGIC   | VERSION | TYPE    | LEN      | PAYLOAD     | CRC16   |
-| u8 A5   | u8 01   | u8      | u16 LE   | LEN bytes   | u16 LE  |
+| u8 A5   | u8 02   | u8      | u16 LE   | LEN bytes   | u16 LE  |
 +---------+---------+---------+----------+-------------+---------+
 ```
 
-- `CRC16` covers `VERSION`, `TYPE`, `LEN`, and `PAYLOAD`; it excludes `MAGIC` and itself.
-- Version 1 uses CRC-16/CCITT-FALSE (`poly=0x1021`, `init=0xFFFF`, `xorout=0x0000`, non-reflected).
-- A receiver rejects unsupported versions and invalid lengths/CRCs, resynchronizing by searching for the next `MAGIC` byte.
-- Default link speed is 460800 baud, 8-N-1. Baud rate remains configuration, not a protocol field.
+CRC-16/CCITT-FALSE (poly `0x1021`, init `0xFFFF`) covers VERSION, TYPE, LEN,
+and PAYLOAD. It excludes MAGIC and the CRC itself. Receivers reject version 1,
+bad lengths, unknown directions/types, and bad CRCs. The Pico IRQ only drains
+UART FIFO bytes into a bounded ring; frame parsing and all state changes run in
+the main loop.
 
 ## Message types
 
@@ -30,6 +35,7 @@ All UART messages use little-endian multi-byte integer fields.
 | Pico → Zero | `0x08` | `PLAY_UNDERRUN` |
 | Pico → Zero | `0x09` | `ERROR` |
 | Pico → Zero | `0x0A` | `PONG` |
+| Pico → Zero | `0x0B` | `MODE_CHANGED` |
 | Zero → Pico | `0x80` | `QUEUE_CLEAR` |
 | Zero → Pico | `0x81` | `QUEUE_EVENT` |
 | Zero → Pico | `0x82` | `QUEUE_END` |
@@ -37,35 +43,33 @@ All UART messages use little-endian multi-byte integer fields.
 | Zero → Pico | `0x84` | `PLAY_ABORT` |
 | Zero → Pico | `0x85` | `STATUS_REQUEST` |
 | Zero → Pico | `0x86` | `PING` |
+| Zero → Pico | `0x87` | `MODE_SET` |
 
-## Payloads
+`MODE_SET` has one byte `target_mode`: PASS=0, RECORD=1, ARMED=2. Pico
+responds to every accepted or rejected request with `MODE_CHANGED`, whose two
+bytes are `state` and `reason`. States are PASS=0, RECORD=1, ARMED=2,
+PLAYING=3, ERROR=4. Reasons are OK=0, INVALID_TRANSITION=1,
+INVALID_TARGET=2, PROTOCOL_ERROR=3, UART_FAULT=4, ABORTED=5,
+UNDERRUN=6.
 
-### `RECORD_EVENT`
+## Mode semantics and payloads
 
-```text
-timestamp_us  u64 LE  Pico hardware timestamp at host receive
-report_len    u8      8 in version 1
-report        bytes   HID Boot Keyboard input report
-```
+- PASS forwards each physical Boot Keyboard report to the PC and emits no
+  `RECORD_EVENT`.
+- RECORD timestamps each valid 8-byte report at the Pico USB-host callback and
+  emits `RECORD_EVENT` to Zero without forwarding it to the PC.
+- ARMED and PLAYING block physical reports. PLAY_START is valid only in ARMED
+  and enters PLAYING; PLAY_ABORT releases keys and returns to ARMED.
+- PASS is valid from every state, cancels playback, clears stale physical data,
+  and sends all keys released before waiting for a new host report.
+- Invalid frames or UART errors enter ERROR (unless already PASS). ERROR blocks
+  input and recovers only with a CRC-checked `MODE_SET(PASS)`.
 
-### `QUEUE_EVENT`
+`RECORD_EVENT` is `timestamp_us u64 LE`, `report_len u8` (8), then the report.
+`QUEUE_EVENT` is `offset_us u64 LE`, `report_len u8` (8), then the report;
+offsets are absolute from the Pico playback epoch. `MODE_CHANGED` is
+`state u8, reason u8`. `PICO_STATUS` is `state u8` followed by four fault
+flags (RX overflow, hardware error, invalid frame, TX drop). PING/PONG have no
+payload. Queue/playback payloads retain their version-1 layouts where used.
 
-```text
-offset_us     u64 LE  absolute offset from the future Pico playback epoch
-report_len    u8      8 in version 1
-report        bytes   HID Boot Keyboard output report
-```
-
-`offset_us` is never a Zero-local deadline and never a delta from the preceding queued event.
-
-### Queue and playback control
-
-- `QUEUE_CLEAR`: no payload; valid only while Pico is ARMED.
-- `QUEUE_END`: no payload; declares that no more events belong to this sequence.
-- `PLAY_START`: no payload; Pico samples its playback epoch immediately and responds with `PLAY_STARTED`.
-- `PLAY_ABORT`: no payload; Pico cancels playback, clears its queue, releases all keys, and returns to ARMED while GPIO remains HIGH.
-- `BUFFER_STATUS`: `used u16 LE`, `capacity u16 LE`, `state u8`. It is Pico's capacity authority.
-- `PLAY_STARTED`: `playback_start_us u64 LE` for diagnostics.
-- `PLAY_UNDERRUN`: `offset_us u64 LE`, `used u16 LE` at detection.
-
-Any future change to the frame, message values, payload layouts, state validity, or CRC requires a versioned update to this document and protocol tests.
+Any frame or payload change requires a versioned update and matching tests.
