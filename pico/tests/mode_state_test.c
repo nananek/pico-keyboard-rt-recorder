@@ -46,6 +46,20 @@ int main(void) {
     CHECK(last_state == PICO_UART_MODE_PASS && last_reason == PICO_UART_REASON_OK);
     CHECK(releases == 0u && clears == 0u);
 
+    // Transport and malformed-frame faults received in PASS only report their
+    // reason. They must not release a key the PC is currently holding or clear
+    // a physical report already accepted for PASS forwarding.
+    pico_mode_state_uart_fault(&mode);
+    CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_PASS);
+    CHECK(pico_mode_state_accepts_physical(&mode));
+    CHECK(last_reason == PICO_UART_REASON_UART_FAULT);
+    CHECK(releases == 0u && clears == 0u);
+    pico_mode_state_protocol_error(&mode);
+    CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_PASS);
+    CHECK(pico_mode_state_accepts_physical(&mode));
+    CHECK(last_reason == PICO_UART_REASON_PROTOCOL_ERROR);
+    CHECK(releases == 0u && clears == 0u);
+
     CHECK(pico_mode_state_handle_mode_set(&mode, PICO_UART_MODE_RECORD));
     CHECK(pico_mode_state_is_recording(&mode));
     CHECK(releases == 1u && clears == 1u && last_reason == PICO_UART_REASON_OK);
@@ -87,9 +101,5 @@ int main(void) {
     CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_PASS);
     CHECK(releases == 7u && clears == 7u);
 
-    pico_mode_state_protocol_error(&mode);
-    CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_PASS);
-    CHECK(last_reason == PICO_UART_REASON_PROTOCOL_ERROR);
-    CHECK(releases == 7u && clears == 7u);
     return failures == 0 ? 0 : 1;
 }

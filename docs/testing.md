@@ -7,9 +7,10 @@ the report layout, pin contract, capture FIFO, UART protocol/CRC, UART ring and
 parser, mode transition, and host adapter tests. These cover split frames,
 bad magic/version/length/CRC, unknown direction/type, ring order and overflow,
 command/TX-ring saturation, idempotent MODE_SET, invalid targets/transitions,
-all-release/queue clearing, and physical input blocking. Only a validated
-command can request a mode change. In particular, a repeated PASS command does
-not release a held key or clear accepted physical input.
+all-release retry/queue clearing, and physical input blocking. Only a validated
+command can request a mode change. In particular, a repeated PASS command and a
+transport or malformed-frame fault received in PASS do not release a held key or
+clear accepted physical input.
 
 `git diff --check` is required before commit. Docker CI additionally performs
 the normal and HID-demo Pico SDK builds with TinyUSB's pinned Pico-PIO-USB

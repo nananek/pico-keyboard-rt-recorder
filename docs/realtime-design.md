@@ -24,7 +24,9 @@ become `RECORD_EVENT` frames carrying that Pico timestamp; in ARMED/PLAYING or
 ERROR they are discarded. A successful state change, abort, or a fault that
 enters ERROR clears queued physical reports and sends an all-zero release report;
 idempotent `MODE_SET(PASS)` retransmission and faults received in PASS do
-neither. UART event arrival is never a timing source.
+neither. If the HID endpoint is temporarily busy, the release is retried before
+any later physical report is forwarded. UART event arrival is never a timing
+source.
 
 Playback remains an absolute-deadline feature: `PLAY_START` samples a Pico
 epoch and future `QUEUE_EVENT` offsets are scheduled against that epoch. A

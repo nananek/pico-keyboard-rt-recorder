@@ -12,16 +12,23 @@
 #include "hardware_config.h"
 #include "keyboard_capture.h"
 #include "mode_state.h"
+#include "safety_release.h"
 #include "uart_protocol.h"
 #include "uart_transport.h"
 
 static pico_keyboard_capture_t keyboard_capture;
 static pico_uart_transport_t uart_transport;
 static pico_mode_state_t mode_state;
+static pico_safety_release_t safety_release;
 
 static void mode_all_release(void *user) {
     (void)user;
-    (void)pico_hid_keyboard_send_all_keys_release();
+    pico_safety_release_request(&safety_release);
+}
+
+static bool send_all_keys_release(void *user) {
+    (void)user;
+    return pico_hid_keyboard_send_all_keys_release();
 }
 
 static void mode_clear_physical(void *user) {
@@ -138,6 +145,7 @@ int main(void) {
     board_init();
     pico_keyboard_capture_init(&keyboard_capture);
     pico_uart_transport_init(&uart_transport);
+    pico_safety_release_init(&safety_release);
     const pico_mode_state_callbacks_t callbacks = {
         .all_release = mode_all_release,
         .clear_physical = mode_clear_physical,
@@ -174,10 +182,16 @@ int main(void) {
         while (pico_uart_transport_pop_command(&uart_transport, &command)) {
             dispatch_command(&command);
         }
-        drain_physical_reports();
+        const bool physical_output_safe = pico_safety_release_service(
+            &safety_release, send_all_keys_release, NULL);
+        if (physical_output_safe) {
+            drain_physical_reports();
+        }
         pico_uart_transport_tx_task(&uart_transport);
 #if PICO_HID_DEMO_TEST
-        hid_demo_test_task();
+        if (physical_output_safe) {
+            hid_demo_test_task();
+        }
 #endif
         sleep_ms(1u);
     }
