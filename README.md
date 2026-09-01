@@ -6,7 +6,10 @@ The project is designed for predictable playback: Pico timestamps physical input
 
 ## Status
 
-Initial project scaffold. The complete implementation roadmap is tracked as GitHub Issues and mirrored in [docs/roadmap.md](docs/roadmap.md).
+Phase 1 provides the Pico 2 USB HID Boot Keyboard device foundation. It
+enumerates as one keyboard interface, uses a fixed 8-byte 6KRO report, and has
+an explicit all-keys-release send path. The complete implementation roadmap is
+tracked as GitHub Issues and mirrored in [docs/roadmap.md](docs/roadmap.md).
 
 ## Architecture at a glance
 
@@ -52,3 +55,58 @@ Physical keyboard -> Pico PIO USB host -> Pico timestamp
 ```
 
 The intended verification steps for every later phase are maintained in [docs/testing.md](docs/testing.md).
+
+## Pico 2 USB HID keyboard (Phase 1)
+
+### Prerequisites
+
+- Pico SDK checkout with submodules, including TinyUSB;
+- CMake 3.13 or newer, Ninja (or another CMake generator), and the Pico 2
+  ARM toolchain;
+- `PICO_SDK_PATH` set to that SDK checkout.
+
+For a standard SDK checkout:
+
+```sh
+git clone --recurse-submodules https://github.com/raspberrypi/pico-sdk.git
+export PICO_SDK_PATH=/path/to/pico-sdk
+```
+
+### Build and flash
+
+The normal build is intentionally quiet: it enumerates as a keyboard but does
+not synthesize a key. Configure and build the Pico 2 target with:
+
+```sh
+cmake -S pico -B pico/build -G Ninja -DPICO_BOARD=pico2 -DCMAKE_BUILD_TYPE=Release
+cmake --build pico/build --target pico_keyboard_hid
+```
+
+Put the Pico 2 into BOOTSEL mode, then copy
+`pico/build/pico_keyboard_hid.uf2` to its mounted USB mass-storage volume (or
+load that UF2 with `picotool`). Connect the firmware's USB device port directly
+to the PC being tested.
+
+### Verify enumeration, press, and release
+
+Run the hardware acceptance build below only on a PC where one deliberate `a`
+keystroke is safe. After USB enumeration and HID endpoint readiness, it sends
+one `a` key press, waits 50 ms, and sends a full all-zero 8-byte release report.
+
+```sh
+cmake -S pico -B pico/build-demo -G Ninja -DPICO_BOARD=pico2 -DPICO_HID_DEMO_TEST=ON
+cmake --build pico/build-demo --target pico_keyboard_hid
+```
+
+Flash the demo UF2, reset the Pico 2, and use the operating system's input-event
+viewer to confirm all of the following:
+
+1. The PC enumerates **Pico 2 Boot Keyboard** as a keyboard device.
+2. The event stream contains one `a` press followed by its release.
+3. No key remains pressed after the release event.
+
+The pure report-layout test can run without the Pico SDK or attached hardware:
+
+```sh
+sh pico/tests/run-host-tests.sh
+```

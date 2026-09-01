@@ -12,6 +12,17 @@ Maintain hardware-independent tests for:
 
 ## Hardware tests by milestone
 
+### USB HID keyboard device
+
+Build `pico_keyboard_hid` for `PICO_BOARD=pico2`, flash the resulting UF2, and
+connect its USB device port to a PC. The PC must enumerate one Boot Keyboard
+interface named `Pico 2 Boot Keyboard`.
+
+For a controlled report-path test, rebuild with `-DPICO_HID_DEMO_TEST=ON`. After
+mount, observe exactly one `a` key press and an all-zero 8-byte release report
+50 ms later in the OS input-event viewer. Confirm that no key remains held.
+The default build sends neither report on its own.
+
 ### Pass-through and capture
 
 Connect a Boot Keyboard compatible keyboard to Pico's PIO USB host path and Pico to a PC as a USB HID keyboard. Verify normal typing works, modifiers and simultaneous keys are retained, and UART `RECORD_EVENT` timestamps originate on Pico.
