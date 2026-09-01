@@ -16,6 +16,20 @@ Safety state machine                   Rename/delete/loop/speed features
 
 The boundary is intentional: a Linux scheduling delay, Python pause, disk stall, or UART transmit delay must not affect a playback deadline already queued on Pico.
 
+## Phase 2 USB host capture
+
+The native RP2350 USB controller is TinyUSB root hub 0 in device mode. The
+Pico-PIO-USB controller on GP12 D+ / GP13 D- is root hub 1 in host mode. Both
+TinyUSB tasks currently run on Pico core 0; host callbacks only copy a raw
+8-byte report plus the callback-entry `time_us_64()` value into a bounded local
+handoff. The opt-in UART diagnostic drains that handoff later, so formatting and
+transport time cannot replace the capture timestamp.
+
+GP2 is initialized as the raw mode-gate input with a pull-down, but Phase 2
+does not implement PASS/ARMED/PLAYING transitions. It is distinct from UART0
+GP0/GP1 and PIO-USB GP12/GP13, preserving GPIO ownership and timing
+responsibility without using the official Pico 2's reserved GP29 VSYS monitor.
+
 ## Data paths
 
 ### PASS

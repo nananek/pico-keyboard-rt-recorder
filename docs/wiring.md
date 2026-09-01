@@ -6,19 +6,33 @@
 - Connect a common ground before connecting UART or mode-control signals.
 - Pico's mode input uses an internal or external pull-down so loss of a driven Zero signal resolves to `LOW` (`PASS`).
 - The physical keyboard and PC USB paths must be electrically distinct. Verify the selected Pico 2 board exposes the required device connection and the chosen PIO USB-host wiring.
+- Supply keyboard VBUS from a separately protected 5 V path with current
+  limiting or a suitable USB power switch. The firmware does not assign a
+  VBUS-enable GPIO. Add ESD protection appropriate to the connector and layout.
 
-## Initial logical pin map
+## Firmware pin map
 
-The following is the version-1 *provisional* mapping. Confirm it against the exact Pico 2 board, PIO USB implementation, and enclosure before soldering; firmware configuration becomes the source of truth once Phase 1 begins.
+`pico/include/hardware_config.h` is the firmware source of truth for UART0,
+USB, and mode pins.
 
-| Signal | Pi Zero 2 W | Pico 2 | Direction |
+| Signal | Pi Zero 2 W | Pico / RP2350 GPIO | Direction |
 | --- | --- | --- | --- |
-| UART TX | GPIO14 / pin 8 | UART RX (provisional GP1) | Zero → Pico |
-| UART RX | GPIO15 / pin 10 | UART TX (provisional GP0) | Pico → Zero |
-| Mode gate | GPIO17 / pin 11 | mode input (provisional GP2) | Zero → Pico |
+| UART TX | GPIO14 / pin 8 | **UART0 RX GP1 / Pico pin 2** | Zero → Pico |
+| UART RX | GPIO15 / pin 10 | **UART0 TX GP0 / Pico pin 1** | Pico → Zero |
+| Mode gate | GPIO17 / pin 11 | **GP2 / Pico pin 4** with pull-down | Zero → Pico |
+| PIO USB D+ | — | **GP12 / Pico header pin 16** | keyboard ↔ Pico |
+| PIO USB D- | — | **GP13 / Pico header pin 17** | keyboard ↔ Pico |
 | Ground | any GND | any GND | shared |
 
-The physical-keyboard PIO USB D+/D− pins are intentionally not assigned in this initial document. Pin choice depends on the selected PIO USB host library and hardware layout and must be decided in the USB-host issue, together with VBUS power, current protection, and connector wiring.
+Pico-PIO-USB is configured for `PIO_USB_PINOUT_DPDM`: GP12 is `pin_dp` and D-
+is derived as the immediately following GP13. Route the pair together, preserve
+that order, and place a recommended 22 Ω series resistor in each data line near
+the RP2350. Do not infer or add a data-line swap in software.
+
+GP2 is exposed on the official Pico 2 header and does not overlap UART0
+GP0/GP1 or PIO-USB GP12/GP13. Firmware compile-time assertions and host tests
+enforce that separation. GP29 remains the official board's internal VSYS/3
+monitor and is not used by this project.
 
 ## Safe power-up and shutdown
 

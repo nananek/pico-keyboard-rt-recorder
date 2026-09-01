@@ -1,9 +1,59 @@
 #include "bsp/board.h"
+#include <stdio.h>
+
+#include "hardware/gpio.h"
+#include "hardware/uart.h"
 #include "pico/stdlib.h"
 #include "tusb.h"
 
+#include "hardware_config.h"
 #include "hid_boot_keyboard.h"
 #include "hid_keyboard_device.h"
+#include "hid_keyboard_host.h"
+#include "keyboard_capture.h"
+
+static pico_keyboard_capture_t keyboard_capture;
+
+static void mode_gate_init(void) {
+    // GP2 is distinct from UART0 GP0/GP1 and PIO-USB GP12/GP13. The pull-down
+    // makes loss of the Pi Zero drive resolve to LOW/PASS.
+    gpio_init(PICO_KEYBOARD_MODE_GPIO);
+    gpio_set_dir(PICO_KEYBOARD_MODE_GPIO, GPIO_IN);
+    gpio_pull_down(PICO_KEYBOARD_MODE_GPIO);
+}
+
+#if PICO_HID_HOST_CAPTURE_TEST
+static void capture_diagnostic_init(void) {
+    uart_init(uart0, 115200u);
+    gpio_set_function(PICO_KEYBOARD_UART_TX_GPIO, GPIO_FUNC_UART);
+    gpio_set_function(PICO_KEYBOARD_UART_RX_GPIO, GPIO_FUNC_UART);
+}
+
+static void capture_diagnostic_task(void) {
+    pico_keyboard_capture_event_t event;
+    char line[128];
+
+    while (pico_keyboard_capture_pop(&keyboard_capture, &event)) {
+        const int count = snprintf(
+            line,
+            sizeof(line),
+            "CAPTURE %llu %u %02x %02x %02x %02x %02x %02x %02x %02x\r\n",
+            (unsigned long long)event.timestamp_us,
+            event.report_len,
+            event.report.modifier,
+            event.report.reserved,
+            event.report.keycode[0],
+            event.report.keycode[1],
+            event.report.keycode[2],
+            event.report.keycode[3],
+            event.report.keycode[4],
+            event.report.keycode[5]);
+        if (count > 0 && (size_t)count < sizeof(line)) {
+            uart_write_blocking(uart0, (const uint8_t *)line, (size_t)count);
+        }
+    }
+}
+#endif
 
 #if PICO_HID_DEMO_TEST
 static void hid_demo_test_task(void) {
@@ -41,17 +91,44 @@ static void hid_demo_test_task(void) {
 
 int main(void) {
     board_init();
-    tusb_init();
+    mode_gate_init();
+    pico_keyboard_capture_init(&keyboard_capture);
+    pico_hid_keyboard_host_init(&keyboard_capture);
+
+#if PICO_HID_HOST_CAPTURE_TEST
+    capture_diagnostic_init();
+#endif
+
+    const tusb_rhport_init_t device_init = {
+        .role = TUSB_ROLE_DEVICE,
+        .speed = TUSB_SPEED_FULL,
+    };
+    const tusb_rhport_init_t host_init = {
+        .role = TUSB_ROLE_HOST,
+        .speed = TUSB_SPEED_FULL,
+    };
+
+    if (!tusb_init(PICO_KEYBOARD_NATIVE_DEVICE_RHPORT, &device_init)) {
+        panic("TinyUSB native device initialization failed");
+    }
+    if (!tusb_init(PICO_KEYBOARD_PIO_HOST_RHPORT, &host_init)) {
+        panic("TinyUSB PIO host initialization failed");
+    }
 
     while (true) {
         tud_task();
+        tuh_task();
 
 #if PICO_HID_DEMO_TEST
         hid_demo_test_task();
 #endif
 
-        // HID work is poll-driven in this phase. Playback scheduling will add
-        // a Pico hardware alarm in its own phase rather than relying on this.
+#if PICO_HID_HOST_CAPTURE_TEST
+        capture_diagnostic_task();
+#endif
+
+        // USB work is poll-driven on one core in this phase. Playback
+        // scheduling will add a Pico hardware alarm in its own phase.
         sleep_ms(1u);
     }
 }

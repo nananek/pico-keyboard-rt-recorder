@@ -6,6 +6,22 @@ Pico's monotonic hardware timer (`time_us_64()` or an equivalent Pico SDK source
 
 Pi Zero timestamps are unsuitable for these purposes. An event observed by Linux has already passed through UART buffering, kernel scheduling, and the userspace service. That arrival time measures transport latency as well as the key event and therefore adds non-deterministic jitter to a recording.
 
+## Phase 2 capture boundary and USB ownership
+
+`tuh_hid_report_received_cb()` samples `time_us_64()` as its first operation.
+That exact value and the unmodified 8-byte Boot Keyboard report enter the
+bounded capture handoff before diagnostic formatting or queue draining. Held or
+duplicate reports and the all-zero release are separate timestamped events;
+deduplication would destroy recording timing and is forbidden.
+
+With Pico SDK 2.2.0's pinned TinyUSB/Pico-PIO-USB integration, core 0 runs both
+`tuh_task()` for the PIO host and `tud_task()` for the native device in the main
+loop. This follows TinyUSB's dual-stack model and avoids an unnecessary
+cross-core queue in Phase 2. The host callback never invokes native-device APIs.
+If later measurement requires moving host service to core 1, the capture
+handoff must gain explicit bounded cross-core synchronization and this ownership
+decision must be updated here.
+
 ## Zero is never the playback scheduler
 
 Zero calculates data but does not execute timing. In particular, `time.sleep()`, `asyncio.sleep()`, `time.monotonic_ns()`, Linux timer wakeups, and UART write completion must not determine the instant a HID report reaches the Pico USB-device path.
