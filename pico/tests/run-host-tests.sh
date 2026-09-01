@@ -47,6 +47,13 @@ build_and_run safety_release \
     "$test_root/../src/safety_release.c" \
     "$test_root/safety_release_test.c"
 
+build_and_run main_dispatch \
+    "$test_root/../src/keyboard_capture.c" \
+    "$test_root/../src/mode_state.c" \
+    "$test_root/../src/physical_report_dispatch.c" \
+    "$test_root/../src/safety_release.c" \
+    "$test_root/main_dispatch_test.c"
+
 "$compiler" -std=c11 -Wall -Wextra -Werror \
     -I"$test_root/stubs" -I"$include_root" \
     "$test_root/../src/keyboard_capture.c" \

@@ -14,18 +14,19 @@ void pico_safety_release_request(pico_safety_release_t *release) {
     }
 }
 
-bool pico_safety_release_service(
+pico_safety_release_result_t pico_safety_release_service(
     pico_safety_release_t *release,
     pico_safety_release_send_t send,
     void *user) {
     if (release == NULL) {
-        return false;
+        return PICO_SAFETY_RELEASE_BLOCKED;
     }
     if (!release->pending) {
-        return true;
+        return PICO_SAFETY_RELEASE_READY;
     }
     if (send != NULL && send(user)) {
         release->pending = false;
+        return PICO_SAFETY_RELEASE_SENT;
     }
-    return !release->pending;
+    return PICO_SAFETY_RELEASE_BLOCKED;
 }

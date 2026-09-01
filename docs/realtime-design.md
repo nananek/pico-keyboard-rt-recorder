@@ -25,8 +25,12 @@ ERROR they are discarded. A successful state change, abort, or a fault that
 enters ERROR clears queued physical reports and sends an all-zero release report;
 idempotent `MODE_SET(PASS)` retransmission and faults received in PASS do
 neither. If the HID endpoint is temporarily busy, the release is retried before
-any later physical report is forwarded. UART event arrival is never a timing
-source.
+any later physical report is forwarded. The loop that successfully submits a
+release does not drain PASS input, because that submission consumes HID endpoint
+readiness; later PASS reports remain queued until a following loop accepts them.
+If submission fails they likewise remain queued for retry. RECORD drains its
+capture FIFO to UART independently of native HID readiness. UART event arrival
+is never a timing source.
 
 Playback remains an absolute-deadline feature: `PLAY_START` samples a Pico
 epoch and future `QUEUE_EVENT` offsets are scheduled against that epoch. A

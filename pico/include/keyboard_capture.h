@@ -48,6 +48,12 @@ bool pico_keyboard_capture_pop(
     pico_keyboard_capture_t *capture,
     pico_keyboard_capture_event_t *event);
 
+// Copies, but does not consume, the oldest accepted physical report. This lets
+// PASS keep a report queued until the native HID endpoint accepts it.
+bool pico_keyboard_capture_peek(
+    const pico_keyboard_capture_t *capture,
+    pico_keyboard_capture_event_t *event);
+
 pico_keyboard_capture_stats_t pico_keyboard_capture_get_stats(
     const pico_keyboard_capture_t *capture);
 

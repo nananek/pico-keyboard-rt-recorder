@@ -12,6 +12,7 @@
 #include "hardware_config.h"
 #include "keyboard_capture.h"
 #include "mode_state.h"
+#include "physical_report_dispatch.h"
 #include "safety_release.h"
 #include "uart_protocol.h"
 #include "uart_transport.h"
@@ -43,7 +44,10 @@ static void mode_changed(void *user, uint8_t state, uint8_t reason) {
         transport, PICO_UART_MODE_CHANGED, payload, sizeof(payload));
 }
 
-static void send_record_event(const pico_keyboard_capture_event_t *event) {
+static void send_record_event(
+    void *user,
+    const pico_keyboard_capture_event_t *event) {
+    (void)user;
     uint8_t payload[17];
     uint64_t timestamp = event->timestamp_us;
     for (unsigned i = 0; i < 8u; ++i) {
@@ -56,15 +60,11 @@ static void send_record_event(const pico_keyboard_capture_event_t *event) {
         &uart_transport, PICO_UART_RECORD_EVENT, payload, sizeof(payload));
 }
 
-static void drain_physical_reports(void) {
-    pico_keyboard_capture_event_t event;
-    while (pico_keyboard_capture_pop(&keyboard_capture, &event)) {
-        if (pico_mode_state_is_recording(&mode_state)) {
-            send_record_event(&event);
-        } else if (pico_mode_state_get(&mode_state) == PICO_UART_MODE_PASS) {
-            (void)pico_hid_keyboard_send_boot_report(&event.report);
-        }
-    }
+static bool send_pass_report(
+    void *user,
+    const pico_hid_boot_keyboard_report_t *report) {
+    (void)user;
+    return pico_hid_keyboard_send_boot_report(report);
 }
 
 static void send_status(void) {
@@ -182,14 +182,16 @@ int main(void) {
         while (pico_uart_transport_pop_command(&uart_transport, &command)) {
             dispatch_command(&command);
         }
-        const bool physical_output_safe = pico_safety_release_service(
+        const pico_safety_release_result_t release_result =
+            pico_safety_release_service(
             &safety_release, send_all_keys_release, NULL);
-        if (physical_output_safe) {
-            drain_physical_reports();
-        }
+        pico_physical_report_dispatch(
+            &keyboard_capture, &mode_state,
+            release_result == PICO_SAFETY_RELEASE_READY, send_pass_report,
+            send_record_event, NULL);
         pico_uart_transport_tx_task(&uart_transport);
 #if PICO_HID_DEMO_TEST
-        if (physical_output_safe) {
+        if (release_result == PICO_SAFETY_RELEASE_READY) {
             hid_demo_test_task();
         }
 #endif

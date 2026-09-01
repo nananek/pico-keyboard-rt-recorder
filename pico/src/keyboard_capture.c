@@ -65,6 +65,17 @@ bool pico_keyboard_capture_pop(
     return true;
 }
 
+bool pico_keyboard_capture_peek(
+    const pico_keyboard_capture_t *capture,
+    pico_keyboard_capture_event_t *event) {
+    if (capture == NULL || event == NULL || capture->count == 0u) {
+        return false;
+    }
+
+    *event = capture->events[capture->read_index];
+    return true;
+}
+
 pico_keyboard_capture_stats_t pico_keyboard_capture_get_stats(
     const pico_keyboard_capture_t *capture) {
     if (capture == NULL) {

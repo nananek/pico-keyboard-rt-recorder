@@ -24,6 +24,8 @@ static void test_preserves_report_and_timestamp(void) {
     pico_keyboard_capture_init(&capture);
     CHECK(pico_keyboard_capture_push(
         &capture, UINT64_C(0x123456789abcdef0), report, sizeof(report)));
+    CHECK(pico_keyboard_capture_peek(&capture, &event));
+    CHECK(event.timestamp_us == UINT64_C(0x123456789abcdef0));
     CHECK(pico_keyboard_capture_pop(&capture, &event));
     CHECK(event.timestamp_us == UINT64_C(0x123456789abcdef0));
     CHECK(event.report_len == PICO_HID_BOOT_KEYBOARD_REPORT_LEN);

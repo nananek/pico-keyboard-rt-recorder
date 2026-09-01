@@ -29,6 +29,7 @@ add_executable(pico_keyboard_hid
     src/hid_keyboard_host.c
     src/keyboard_capture.c
     src/mode_state.c
+    src/physical_report_dispatch.c
     src/safety_release.c
     src/uart_protocol.c
     src/uart_transport.c
