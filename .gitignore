@@ -1,0 +1,18 @@
+# Pico SDK builds
+pico/build/
+pico/cmake-build-*/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Runtime data and local configuration
+zero/recordings/*
+!zero/recordings/.gitkeep
+*.log
+.env
+
+# Editors and operating systems
+.DS_Store
+.vscode/
