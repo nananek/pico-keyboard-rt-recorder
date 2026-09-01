@@ -1,0 +1,26 @@
+name: Verify firmware
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pico:
+    name: Docker Pico 2 build and report tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test in the pinned Docker environment
+        run: docker build --target verify --tag pico-keyboard-verify:${{ github.sha }} .
