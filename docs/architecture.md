@@ -29,8 +29,9 @@ loop when UART space is available.
 ## Safety
 
 PASS forwards physical reports. RECORD captures reports and does not forward
-them. ARMED and PLAYING block physical input. PASS from any state cancels stale
-physical data, sends all-keys-release, and waits for a fresh host report.
+them. ARMED and PLAYING block physical input. Entering PASS from a non-PASS
+state cancels stale physical data, sends all-keys-release, and waits for a
+fresh host report; repeated PASS commands preserve current physical input.
 Malformed frames, ring overflow, and UART hardware errors enter ERROR outside
 PASS; ERROR blocks input until a valid `MODE_SET(PASS)` recovers it. Every
 accepted or rejected mode request is acknowledged with `MODE_CHANGED(state,

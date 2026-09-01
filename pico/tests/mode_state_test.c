@@ -39,6 +39,13 @@ int main(void) {
     pico_mode_state_init(&mode, &callbacks);
 
     CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_PASS);
+    // PASS is idempotent: retransmitting it must not release a held key or
+    // discard physical reports that were already accepted in PASS.
+    CHECK(pico_mode_state_handle_mode_set(&mode, PICO_UART_MODE_PASS));
+    CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_PASS);
+    CHECK(last_state == PICO_UART_MODE_PASS && last_reason == PICO_UART_REASON_OK);
+    CHECK(releases == 0u && clears == 0u);
+
     CHECK(pico_mode_state_handle_mode_set(&mode, PICO_UART_MODE_RECORD));
     CHECK(pico_mode_state_is_recording(&mode));
     CHECK(releases == 1u && clears == 1u && last_reason == PICO_UART_REASON_OK);

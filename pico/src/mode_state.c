@@ -53,8 +53,10 @@ bool pico_mode_state_handle_mode_set(pico_mode_state_t *mode, uint8_t target) {
         return false;
     }
     if (target == PICO_UART_MODE_PASS) {
-        clear_and_release(mode);
-        mode->state = PICO_UART_MODE_PASS;
+        if (mode->state != PICO_UART_MODE_PASS) {
+            clear_and_release(mode);
+            mode->state = PICO_UART_MODE_PASS;
+        }
         notify(mode, PICO_UART_REASON_OK);
         return true;
     }

@@ -64,8 +64,10 @@ returns `MODE_CHANGED(current_state, INVALID_TARGET)`.
   and enters PLAYING; PLAY_ABORT returns to ARMED. Every successful mode
   transition, abort, or fault clears queued physical reports and sends an
   all-keys-release report.
-- PASS is valid from every state, cancels playback, clears stale physical data,
-  and sends all keys released before waiting for a new host report.
+- PASS entered from a non-PASS state cancels playback, clears stale physical
+  data, and sends all keys released before waiting for a new host report. A
+  repeated `MODE_SET(PASS)` while already in PASS only acknowledges the request;
+  it preserves held keys and accepted physical reports.
 - Invalid frames or UART errors enter ERROR (unless already PASS). ERROR blocks
   input and recovers only with a CRC-checked `MODE_SET(PASS)`.
 
