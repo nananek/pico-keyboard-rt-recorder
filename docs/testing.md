@@ -6,8 +6,9 @@
 the report layout, pin contract, capture FIFO, UART protocol/CRC, UART ring and
 parser, mode transition, and host adapter tests. These cover split frames,
 bad magic/version/length/CRC, unknown direction/type, ring order and overflow,
-idempotent MODE_SET, invalid transitions, all-release/queue clearing, and
-physical input blocking. A valid frame is the only input that can change mode.
+command/TX-ring saturation, idempotent MODE_SET, invalid targets/transitions,
+all-release/queue clearing, and physical input blocking. Only a validated
+command can request a mode change.
 
 `git diff --check` is required before commit. Docker CI additionally performs
 the normal and HID-demo Pico SDK builds with TinyUSB's pinned Pico-PIO-USB

@@ -115,7 +115,10 @@ bool pico_uart_frame_payload_valid(const pico_uart_frame_t *frame) {
     }
     switch (frame->type) {
         case PICO_UART_MODE_SET:
-            return frame->payload_len == 1u && frame->payload[0] <= PICO_UART_MODE_ARMED;
+            // A target outside the public mode range is still a well-formed
+            // command. The state machine rejects it with MODE_CHANGED rather
+            // than treating it as transport corruption.
+            return frame->payload_len == 1u;
         case PICO_UART_QUEUE_EVENT:
             return frame->payload_len == 17u && frame->payload[8] == 8u;
         case PICO_UART_PLAY_STARTED:
@@ -124,6 +127,7 @@ bool pico_uart_frame_payload_valid(const pico_uart_frame_t *frame) {
             return frame->payload_len == 17u && frame->payload[8] == 8u;
         case PICO_UART_MODE_CHANGED:
             return frame->payload_len == 2u;
+        case PICO_UART_PICO_STATUS:
         case PICO_UART_BUFFER_STATUS:
             return frame->payload_len == 5u;
         case PICO_UART_PLAY_UNDERRUN:

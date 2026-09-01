@@ -5,12 +5,18 @@ the mode state. UART0 RX uses a bounded single-producer/single-consumer byte
 ring. The interrupt handler drains the FIFO, counts framing/parity/overrun
 errors, and returns; it never blocks, allocates, invokes TinyUSB, or sends HID.
 Ring overflow and hardware errors are latched for main-loop handling.
+The ring holds 256 bytes: more than three maximum-size 71-byte frames and
+about 5.5 ms of continuous 460800-baud 8-N-1 input, while the main loop's
+normal sleep interval is 1 ms.
 
 The main loop resynchronizes on `0xA5`, validates version 2, bounded length,
 CRC-16/CCITT-FALSE, direction/type, and payload shape. Valid commands enter a
 small command queue. Invalid input never changes mode directly and causes a
 safe UART-fault transition when the current mode is not PASS. TX frames use a
-bounded ring and are drained only while UART hardware is writable.
+bounded ring and are drained only while UART hardware is writable. A full TX
+ring drops an entire frame and increments `tx_dropped`; mode commands remain
+safe because `MODE_SET` is idempotent and the Zero retries it if its
+`MODE_CHANGED` acknowledgement is absent.
 
 Physical reports are timestamped with `time_us_64()` at the TinyUSB host
 callback. In PASS they are forwarded to the native HID device; in RECORD they

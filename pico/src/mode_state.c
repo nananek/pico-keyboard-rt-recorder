@@ -80,6 +80,7 @@ bool pico_mode_state_play_start(pico_mode_state_t *mode) {
         }
         return false;
     }
+    clear_and_release(mode);
     mode->state = PICO_UART_MODE_PLAYING;
     notify(mode, PICO_UART_REASON_OK);
     return true;
@@ -103,8 +104,8 @@ static void enter_error(pico_mode_state_t *mode, uint8_t reason) {
     if (mode == NULL) {
         return;
     }
+    clear_and_release(mode);
     if (mode->state != PICO_UART_MODE_PASS) {
-        clear_and_release(mode);
         mode->state = PICO_UART_MODE_ERROR;
     }
     notify(mode, reason);

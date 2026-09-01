@@ -31,7 +31,7 @@ typedef struct {
 typedef struct {
     uint8_t rx_bytes[PICO_UART_RX_RING_CAPACITY];
     volatile uint16_t rx_head;
-    uint16_t rx_tail;
+    volatile uint16_t rx_tail;
     pico_uart_frame_t commands[PICO_UART_COMMAND_CAPACITY];
     uint8_t command_head;
     uint8_t command_tail;

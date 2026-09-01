@@ -33,4 +33,6 @@ them. ARMED and PLAYING block physical input. PASS from any state cancels stale
 physical data, sends all-keys-release, and waits for a fresh host report.
 Malformed frames, ring overflow, and UART hardware errors enter ERROR outside
 PASS; ERROR blocks input until a valid `MODE_SET(PASS)` recovers it. Every
-transition is acknowledged with `MODE_CHANGED(state, reason)`.
+accepted or rejected mode request is acknowledged with `MODE_CHANGED(state,
+reason)`. Each successful state transition, abort, or fault clears physical
+data and sends all keys released.

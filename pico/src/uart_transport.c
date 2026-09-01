@@ -89,15 +89,22 @@ void pico_uart_transport_poll(pico_uart_transport_t *transport) {
         }
         transport->parser[transport->parser_len++] = byte;
 
+        // Reject an unsupported version as soon as its complete fixed-size
+        // prefix is present. Its declared length is untrusted, so waiting for
+        // that many bytes could consume a following valid frame.
+        if (transport->parser_len == 2u &&
+            transport->parser[1] != PICO_UART_PROTOCOL_VERSION) {
+            note_decode_error(transport, PICO_UART_DECODE_BAD_VERSION);
+            transport->parser_len = 0u;
+            continue;
+        }
         if (transport->parser_len < PICO_UART_PROTOCOL_HEADER_LEN) {
             continue;
         }
         const uint16_t payload_len = (uint16_t)transport->parser[3] |
                                      ((uint16_t)transport->parser[4] << 8);
         if (payload_len > PICO_UART_PROTOCOL_MAX_PAYLOAD) {
-            ++transport->stats.invalid_frames;
-            ++transport->stats.bad_length;
-            transport->fault_pending = true;
+            note_decode_error(transport, PICO_UART_DECODE_BAD_LENGTH);
             transport->parser_len = 0u;
             continue;
         }

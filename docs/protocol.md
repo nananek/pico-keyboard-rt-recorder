@@ -50,7 +50,9 @@ responds to every accepted or rejected request with `MODE_CHANGED`, whose two
 bytes are `state` and `reason`. States are PASS=0, RECORD=1, ARMED=2,
 PLAYING=3, ERROR=4. Reasons are OK=0, INVALID_TRANSITION=1,
 INVALID_TARGET=2, PROTOCOL_ERROR=3, UART_FAULT=4, ABORTED=5,
-UNDERRUN=6.
+UNDERRUN=6. A CRC-valid `MODE_SET` with an unsupported target is a rejected
+command, not a malformed frame: it leaves the current state unchanged and
+returns `MODE_CHANGED(current_state, INVALID_TARGET)`.
 
 ## Mode semantics and payloads
 
@@ -59,7 +61,9 @@ UNDERRUN=6.
 - RECORD timestamps each valid 8-byte report at the Pico USB-host callback and
   emits `RECORD_EVENT` to Zero without forwarding it to the PC.
 - ARMED and PLAYING block physical reports. PLAY_START is valid only in ARMED
-  and enters PLAYING; PLAY_ABORT releases keys and returns to ARMED.
+  and enters PLAYING; PLAY_ABORT returns to ARMED. Every successful mode
+  transition, abort, or fault clears queued physical reports and sends an
+  all-keys-release report.
 - PASS is valid from every state, cancels playback, clears stale physical data,
   and sends all keys released before waiting for a new host report.
 - Invalid frames or UART errors enter ERROR (unless already PASS). ERROR blocks
@@ -71,5 +75,9 @@ offsets are absolute from the Pico playback epoch. `MODE_CHANGED` is
 `state u8, reason u8`. `PICO_STATUS` is `state u8` followed by four fault
 flags (RX overflow, hardware error, invalid frame, TX drop). PING/PONG have no
 payload. Queue/playback payloads retain their version-1 layouts where used.
+If the bounded TX ring is full, Pico drops the whole outgoing frame and latches
+the TX-drop status flag; it never blocks the host callback or a state
+transition. `RECORD_EVENT` loss is observable through that flag. A Zero that
+misses a `MODE_CHANGED` acknowledgement retries its idempotent `MODE_SET`.
 
 Any frame or payload change requires a versioned update and matching tests.
