@@ -32,7 +32,9 @@ dependency.
    reports remain blocked in ARMED/PLAYING, and abort releases all keys.
 6. Inject bad CRC/version/length bytes and UART framing errors. Confirm ERROR,
    all-release, blocked input, and recovery only after a valid
-   `MODE_SET(PASS)`. Disconnect/reconnect UART and repeat.
+   `MODE_SET(PASS)` while ARMED or PLAYING. In PASS, confirm the same malformed
+   input leaves a held key intact while reporting the fault. Disconnect/reconnect
+   UART and repeat.
 
 UART event time is not used as a HID deadline. Playback timing must be checked
 against the Pico hardware timer in the later playback acceptance phase.

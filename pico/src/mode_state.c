@@ -106,9 +106,13 @@ static void enter_error(pico_mode_state_t *mode, uint8_t reason) {
     if (mode == NULL) {
         return;
     }
-    clear_and_release(mode);
     if (mode->state != PICO_UART_MODE_PASS) {
-        mode->state = PICO_UART_MODE_ERROR;
+        // Once ERROR has blocked physical input and released the PC state,
+        // later transport faults have no additional state to make safe.
+        if (mode->state != PICO_UART_MODE_ERROR) {
+            clear_and_release(mode);
+            mode->state = PICO_UART_MODE_ERROR;
+        }
     }
     notify(mode, reason);
 }

@@ -21,9 +21,10 @@ safe because `MODE_SET` is idempotent and the Zero retries it if its
 Physical reports are timestamped with `time_us_64()` at the TinyUSB host
 callback. In PASS they are forwarded to the native HID device; in RECORD they
 become `RECORD_EVENT` frames carrying that Pico timestamp; in ARMED/PLAYING or
-ERROR they are discarded. A state transition clears queued physical reports and
-sends an all-zero release report; idempotent `MODE_SET(PASS)` retransmission
-does neither. UART event arrival is never a timing source.
+ERROR they are discarded. A successful state change, abort, or a fault that
+enters ERROR clears queued physical reports and sends an all-zero release report;
+idempotent `MODE_SET(PASS)` retransmission and faults received in PASS do
+neither. UART event arrival is never a timing source.
 
 Playback remains an absolute-deadline feature: `PLAY_START` samples a Pico
 epoch and future `QUEUE_EVENT` offsets are scheduled against that epoch. A

@@ -65,6 +65,8 @@ static void test_parser_rejects_and_resynchronizes(void) {
     feed(&transport, frame, length);
     pico_uart_transport_poll(&transport);
     CHECK(pico_uart_transport_get_stats(&transport).bad_magic == 1u);
+    CHECK(pico_uart_transport_get_stats(&transport).invalid_frames == 1u);
+    CHECK(pico_uart_transport_take_fault(&transport));
     CHECK(pico_uart_transport_pop_command(&transport, &command));
 
     pico_uart_transport_init(&transport);

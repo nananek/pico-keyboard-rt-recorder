@@ -33,8 +33,10 @@ feeds the queue, and controls the UI. The boundary is framed binary UART0
 - States are PASS, RECORD, ARMED, PLAYING, and ERROR. PASS forwards physical
   reports; RECORD timestamps and sends `RECORD_EVENT` without forwarding;
   ARMED/PLAYING/ERROR block physical reports.
-- Every mode transition, abort, and fault clears stale physical input and sends
-  an all-keys-release report. PASS waits for a fresh host report after release.
+- Every successful state change, abort, and fault that enters ERROR clears stale
+  physical input and sends an all-keys-release report. PASS waits for a fresh
+  host report after release; an idempotent `MODE_SET(PASS)` leaves current input
+  untouched.
 - UART faults and malformed frames enter ERROR outside PASS. ERROR recovers only
   after a CRC-checked `MODE_SET(PASS)`.
 

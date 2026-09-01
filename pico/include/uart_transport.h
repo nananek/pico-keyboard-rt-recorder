@@ -2,6 +2,7 @@
 #define PICO_KEYBOARD_RT_UART_TRANSPORT_H
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 #include "uart_protocol.h"
@@ -40,7 +41,10 @@ typedef struct {
     uint16_t tx_tail;
     uint8_t parser[PICO_UART_PARSER_CAPACITY];
     uint8_t parser_len;
-    volatile bool fault_pending;
+    // Written from the UART IRQ and consumed in the main loop.  This must not
+    // be a plain flag: clearing a plain flag can otherwise lose an IRQ fault
+    // that arrives at the same instant.
+    atomic_bool fault_pending;
     pico_uart_transport_stats_t stats;
 } pico_uart_transport_t;
 

@@ -62,14 +62,24 @@ returns `MODE_CHANGED(current_state, INVALID_TARGET)`.
   emits `RECORD_EVENT` to Zero without forwarding it to the PC.
 - ARMED and PLAYING block physical reports. PLAY_START is valid only in ARMED
   and enters PLAYING; PLAY_ABORT returns to ARMED. Every successful mode
-  transition, abort, or fault clears queued physical reports and sends an
-  all-keys-release report.
+  transition, abort, or fault that enters ERROR clears queued physical reports
+  and sends an all-keys-release report.
 - PASS entered from a non-PASS state cancels playback, clears stale physical
   data, and sends all keys released before waiting for a new host report. A
   repeated `MODE_SET(PASS)` while already in PASS only acknowledges the request;
   it preserves held keys and accepted physical reports.
 - Invalid frames or UART errors enter ERROR (unless already PASS). ERROR blocks
-  input and recovers only with a CRC-checked `MODE_SET(PASS)`.
+  input and recovers only with a CRC-checked `MODE_SET(PASS)`. A fault in PASS
+  leaves physical input intact and reports the fault reason without entering
+  ERROR.
+
+| Action | Valid current state | Result |
+| --- | --- | --- |
+| `MODE_SET(PASS)` | Any | PASS; only a non-PASS source state clears input and releases keys. |
+| `MODE_SET(RECORD)` | PASS, RECORD | RECORD |
+| `MODE_SET(ARMED)` | PASS, ARMED | ARMED |
+| `PLAY_START` | ARMED | PLAYING |
+| `PLAY_ABORT` | ARMED, PLAYING | ARMED with reason `ABORTED` |
 
 `RECORD_EVENT` is `timestamp_us u64 LE`, `report_len u8` (8), then the report.
 `QUEUE_EVENT` is `offset_us u64 LE`, `report_len u8` (8), then the report;

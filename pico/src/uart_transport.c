@@ -2,6 +2,10 @@
 
 #include <string.h>
 
+static void latch_fault(pico_uart_transport_t *transport) {
+    atomic_store_explicit(&transport->fault_pending, true, memory_order_relaxed);
+}
+
 static void note_decode_error(
     pico_uart_transport_t *transport,
     pico_uart_decode_result_t result) {
@@ -13,12 +17,13 @@ static void note_decode_error(
         case PICO_UART_DECODE_BAD_CRC: ++transport->stats.bad_crc; break;
         default: break;
     }
-    transport->fault_pending = true;
+    latch_fault(transport);
 }
 
 void pico_uart_transport_init(pico_uart_transport_t *transport) {
     if (transport != NULL) {
         memset(transport, 0, sizeof(*transport));
+        atomic_init(&transport->fault_pending, false);
     }
 }
 
@@ -31,7 +36,7 @@ void pico_uart_transport_rx_push_isr(
     const uint16_t head = transport->rx_head;
     if ((uint16_t)(head - transport->rx_tail) >= PICO_UART_RX_RING_CAPACITY) {
         ++transport->stats.rx_overflow;
-        transport->fault_pending = true;
+        latch_fault(transport);
         return;
     }
     transport->rx_bytes[head % PICO_UART_RX_RING_CAPACITY] = byte;
@@ -41,7 +46,7 @@ void pico_uart_transport_rx_push_isr(
 void pico_uart_transport_hardware_error_isr(pico_uart_transport_t *transport) {
     if (transport != NULL) {
         ++transport->stats.hardware_errors;
-        transport->fault_pending = true;
+        latch_fault(transport);
     }
 }
 
@@ -53,13 +58,13 @@ static void enqueue_command(pico_uart_transport_t *transport,
         if (!pico_uart_type_known(frame->type)) {
             ++transport->stats.unknown_type;
         }
-        transport->fault_pending = true;
+        latch_fault(transport);
         return;
     }
     if ((uint8_t)(transport->command_head - transport->command_tail) >=
         PICO_UART_COMMAND_CAPACITY) {
         ++transport->stats.command_overflow;
-        transport->fault_pending = true;
+        latch_fault(transport);
         return;
     }
     transport->commands[transport->command_head % PICO_UART_COMMAND_CAPACITY] = *frame;
@@ -77,14 +82,14 @@ void pico_uart_transport_poll(pico_uart_transport_t *transport) {
 
         if (transport->parser_len == 0u) {
             if (byte != PICO_UART_PROTOCOL_MAGIC) {
-                ++transport->stats.bad_magic;
+                note_decode_error(transport, PICO_UART_DECODE_BAD_MAGIC);
                 continue;
             }
         }
         if (transport->parser_len >= PICO_UART_PARSER_CAPACITY) {
             ++transport->stats.invalid_frames;
             ++transport->stats.bad_length;
-            transport->fault_pending = true;
+            latch_fault(transport);
             transport->parser_len = 0u;
         }
         transport->parser[transport->parser_len++] = byte;
@@ -174,11 +179,9 @@ bool pico_uart_transport_pop_tx_byte(
 }
 
 bool pico_uart_transport_take_fault(pico_uart_transport_t *transport) {
-    if (transport == NULL || !transport->fault_pending) {
-        return false;
-    }
-    transport->fault_pending = false;
-    return true;
+    return transport != NULL &&
+           atomic_exchange_explicit(
+               &transport->fault_pending, false, memory_order_relaxed);
 }
 
 pico_uart_transport_stats_t pico_uart_transport_get_stats(
