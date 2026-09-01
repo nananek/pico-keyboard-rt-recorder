@@ -115,12 +115,14 @@ sh pico/tests/run-host-tests.sh
 
 The repository's CI uses Docker as its build environment. It pins Pico SDK
 2.2.0, installs the Pico 2 toolchain in the container, runs the host report
-test, and cross-builds the UF2. Run the same verification locally with Docker:
+test, and cross-builds both UF2 configurations. Run the same verification
+locally with Docker:
 
 ```sh
 docker build --target verify --tag pico-keyboard-verify .
 ```
 
-The final image contains `/pico_keyboard_hid.uf2`; it is only produced when
-both verification steps pass. Hardware enumeration still requires flashing that
-UF2 to a Pico 2 and following the on-device steps above.
+The final image contains the normal `/pico_keyboard_hid.uf2` and acceptance-test
+`/pico_keyboard_hid_demo.uf2`; it is only produced after the host test and both
+firmware configurations build successfully. Hardware enumeration still requires
+flashing the appropriate UF2 to a Pico 2 and following the on-device steps above.
