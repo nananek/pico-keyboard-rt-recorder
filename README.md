@@ -41,6 +41,32 @@ cmake --build pico/build --target pico_keyboard_hid
 sh pico/tests/run-host-tests.sh
 ```
 
+## Pi Zero recorder CLI
+
+The Zero recorder stores only the timestamps supplied by Pico UART
+`RECORD_EVENT` frames; it never substitutes serial receive time. It requires
+Python 3.10+ and PySerial:
+
+```sh
+python3 -m pip install -r zero/requirements.txt
+cd zero
+python3 -m unittest discover -s tests -v
+
+# The recorder remains in PASS unless `record` is explicitly requested.
+PYTHONPATH=. python3 -m app --recordings-dir recordings record hello --device /dev/serial0
+# Press Ctrl-C to request PASS, receive its acknowledgement, and publish hello.json.
+PYTHONPATH=. python3 -m app --recordings-dir recordings list
+PYTHONPATH=. python3 -m app --recordings-dir recordings dump hello
+PYTHONPATH=. python3 -m app stop --device /dev/serial0
+```
+
+`record`, `stop`, `list`, and `dump` print JSON. `record` only atomically
+publishes a file after a successful `MODE_SET(PASS)` acknowledgement. Invalid
+UART frames, Pico errors, disconnection, rejected/timed-out transitions, and
+unsafe recording names leave no partial recording. Saved names allow only
+ASCII letters, digits, `.`, `_`, and `-`, so they cannot escape the recordings
+directory.
+
 The optional `PICO_HID_DEMO_TEST=ON` build sends one safe A press/release after
 device enumeration. The normal firmware is UART-enabled and has no textual
 capture diagnostic. Docker reproduces host tests and normal/demo UF2 builds:
