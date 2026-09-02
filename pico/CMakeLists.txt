@@ -16,11 +16,24 @@ pico_sdk_init()
 option(PICO_HID_DEMO_TEST
        "Send one A press/release after USB mount for hardware acceptance testing"
        OFF)
+if(NOT TARGET tinyusb_pico_pio_usb)
+    message(FATAL_ERROR
+        "Pico-PIO-USB is unavailable. Initialize TinyUSB, then run "
+        "Pico SDK's lib/tinyusb/tools/get_deps.py rp2040 before configuring.")
+endif()
 
 add_executable(pico_keyboard_hid
     src/main.c
     src/hid_boot_keyboard.c
     src/hid_keyboard_device.c
+    src/hid_keyboard_host.c
+    src/keyboard_capture.c
+    src/mode_state.c
+    src/physical_report_dispatch.c
+    src/safety_release.c
+    src/uart_protocol.c
+    src/uart_transport.c
+    src/uart_transport_pico.c
     src/usb_descriptors.c
 )
 
@@ -31,10 +44,17 @@ target_link_libraries(pico_keyboard_hid PRIVATE
     pico_stdlib
     pico_unique_id
     tinyusb_device
+    tinyusb_host
+    tinyusb_pico_pio_usb
     tinyusb_board
+    hardware_uart
+    hardware_irq
 )
 
 target_compile_definitions(pico_keyboard_hid PRIVATE
+    BOARD_TUD_RHPORT=0
+    BOARD_TUH_RHPORT=1
+    PICO_DEFAULT_PIO_USB_DP_PIN=12
     PICO_HID_DEMO_TEST=$<BOOL:${PICO_HID_DEMO_TEST}>
 )
 

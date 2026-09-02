@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Version 1 is a USB HID Boot Keyboard report: modifier, reserved, and six
+// The current USB HID Boot Keyboard report is modifier, reserved, and six
 // key usages (6KRO). The report has no HID report ID byte.
 enum {
     PICO_HID_BOOT_KEYBOARD_REPORT_LEN = 8u,

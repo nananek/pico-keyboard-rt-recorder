@@ -1,43 +1,38 @@
 # Real-time design
 
-## Pico is the master clock
+The Pico main loop is the only context allowed to parse UART frames or change
+the mode state. UART0 RX uses a bounded single-producer/single-consumer byte
+ring. The interrupt handler drains the FIFO, counts framing/parity/overrun
+errors, and returns; it never blocks, allocates, invokes TinyUSB, or sends HID.
+Ring overflow and hardware errors are latched for main-loop handling.
+The ring holds 256 bytes: more than three maximum-size 71-byte frames and
+about 5.5 ms of continuous 460800-baud 8-N-1 input, while the main loop's
+normal sleep interval is 1 ms.
 
-Pico's monotonic hardware timer (`time_us_64()` or an equivalent Pico SDK source) is the sole timing reference for capture and playback. Its clock is sampled when the USB-host path receives a physical keyboard report, and it establishes the playback epoch when Pico receives `PLAY_START`.
+The main loop resynchronizes on `0xA5`, validates version 2, bounded length,
+CRC-16/CCITT-FALSE, direction/type, and payload shape. Valid commands enter a
+small command queue. Invalid input never changes mode directly and causes a
+safe UART-fault transition when the current mode is not PASS. TX frames use a
+bounded ring and are drained only while UART hardware is writable. A full TX
+ring drops an entire frame and increments `tx_dropped`; mode commands remain
+safe because `MODE_SET` is idempotent and the Zero retries it if its
+`MODE_CHANGED` acknowledgement is absent.
 
-Pi Zero timestamps are unsuitable for these purposes. An event observed by Linux has already passed through UART buffering, kernel scheduling, and the userspace service. That arrival time measures transport latency as well as the key event and therefore adds non-deterministic jitter to a recording.
+Physical reports are timestamped with `time_us_64()` at the TinyUSB host
+callback. In PASS they are forwarded to the native HID device; in RECORD they
+become `RECORD_EVENT` frames carrying that Pico timestamp; in ARMED/PLAYING or
+ERROR they are discarded. A successful state change, abort, or a fault that
+enters ERROR clears queued physical reports and sends an all-zero release report;
+idempotent `MODE_SET(PASS)` retransmission and faults received in PASS do
+neither. If the HID endpoint is temporarily busy, the release is retried before
+any later physical report is forwarded. The loop that successfully submits a
+release does not drain PASS input, because that submission consumes HID endpoint
+readiness; later PASS reports remain queued until a following loop accepts them.
+If submission fails they likewise remain queued for retry. RECORD drains its
+capture FIFO to UART independently of native HID readiness. UART event arrival
+is never a timing source.
 
-## Zero is never the playback scheduler
-
-Zero calculates data but does not execute timing. In particular, `time.sleep()`, `asyncio.sleep()`, `time.monotonic_ns()`, Linux timer wakeups, and UART write completion must not determine the instant a HID report reaches the Pico USB-device path.
-
-Zero converts persisted `dt_us` values into absolute offsets, applies speed scaling, and queues future events. Pico calculates each deadline as:
-
-```text
-deadline_us = playback_start_us + event.offset_us
-```
-
-An alarm or equivalent hardware-timer mechanism wakes the Pico scheduler for the next deadline. Where TinyUSB requires task context rather than an interrupt callback, the alarm transfers ready work to that context; it does not convert the design into a relative-delay loop.
-
-## Why absolute deadlines matter
-
-With relative scheduling, a late event pushes all following events later. With absolute offsets, Pico dispatches a late event immediately, records its lateness, and still evaluates the next event against its original deadline. Jitter therefore does not accumulate into playback drift.
-
-## Prebuffer and streaming
-
-Before `PLAY_START`, Zero must queue at least 500 ms of future events, or all events for a shorter sequence. While playing, Zero maintains a 500 ms target buffer and treats 200 ms as the initial minimum operating reserve. These values are configuration defaults, not scheduling sources.
-
-Prebuffering isolates Pico timing from short Zero CPU, disk, web, or UART delays. It does not guarantee uninterrupted playback indefinitely: Zero continuously replenishes the buffer using Pico-advertised capacity.
-
-## Late reports, underrun, and failure
-
-Pico records `lateness_us = dispatch_time_us - deadline_us`. Small lateness is dispatched immediately; the next deadline remains unchanged. The initial acceptance target is maximum scheduler jitter below 1 ms under the defined test load, with measurement retained for later optimization.
-
-If the playback queue becomes empty before `QUEUE_END`, Pico must:
-
-1. cancel pending playback scheduling;
-2. send an all-keys-release HID report;
-3. enter `ERROR`;
-4. notify Zero with `PLAY_UNDERRUN`; and
-5. keep physical keyboard input blocked until the mode GPIO is LOW.
-
-UART loss during playback follows the same safe-stop policy. Pico must not continue queued playback after detecting link loss in version 1.
+Playback remains an absolute-deadline feature: `PLAY_START` samples a Pico
+epoch and future `QUEUE_EVENT` offsets are scheduled against that epoch. A
+Zero sleep, UART write time, or chained delay must not determine HID output.
+Playback alarm work must hand off USB calls to a safe Pico context when needed.

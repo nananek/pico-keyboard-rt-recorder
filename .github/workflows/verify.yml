@@ -16,11 +16,11 @@ concurrency:
 
 jobs:
   pico:
-    name: Docker Pico 2 build and report tests
+    name: Docker dual USB build and UART tests
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and test in the pinned Docker environment
+      - name: Test UART transport and build host/device firmware
         run: docker build --target verify --tag pico-keyboard-verify:${{ github.sha }} .

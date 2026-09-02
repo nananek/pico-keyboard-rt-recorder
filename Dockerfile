@@ -20,20 +20,23 @@ RUN apt-get update \
         python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# This firmware only needs TinyUSB. Initialise that required SDK submodule
-# explicitly instead of downloading unrelated Bluetooth, Wi-Fi, TLS, and TCP/IP
-# stacks during every clean CI build.
+# This firmware needs TinyUSB and its pinned Pico-PIO-USB dependency. TinyUSB
+# 0.18 obtains MCU dependencies with get_deps.py rather than Git submodules.
 RUN git clone --branch "${PICO_SDK_VERSION}" --depth 1 \
         https://github.com/raspberrypi/pico-sdk.git /opt/pico-sdk \
-    && git -C /opt/pico-sdk submodule update --init --depth 1 lib/tinyusb
+    && git -C /opt/pico-sdk submodule update --init --recursive --depth 1 \
+        lib/tinyusb \
+    && python3 /opt/pico-sdk/lib/tinyusb/tools/get_deps.py rp2040 \
+    && test -f \
+        /opt/pico-sdk/lib/tinyusb/hw/mcu/raspberry_pi/Pico-PIO-USB/src/pio_usb.c
 
 ENV PICO_SDK_PATH=/opt/pico-sdk
 
 WORKDIR /workspace
 COPY pico ./pico
 
-# First run the hardware-independent report tests, then build both Pico 2
-# firmware configurations. None of these steps needs an attached USB device.
+# First run hardware-independent pin/report/UART/mode/host-adapter tests, then
+# build the Pico 2 firmware configurations. No step needs attached hardware.
 RUN sh pico/tests/run-host-tests.sh
 RUN cmake -S pico -B /tmp/pico-build -G Ninja \
         -DPICO_BOARD=pico2 \
