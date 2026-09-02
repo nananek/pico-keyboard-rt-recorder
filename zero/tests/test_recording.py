@@ -58,15 +58,34 @@ class RecordingTests(unittest.TestCase):
             self.assertEqual([item["name"] for item in store.list_metadata()], ["alpha", "zeta"])
             self.assertEqual(store.load("alpha").to_dict()["events"][0]["dt_us"], 0)
 
-    def test_atomic_replace_failure_never_publishes_partial_file(self):
+    def test_atomic_publication_failure_never_publishes_partial_file(self):
         with tempfile.TemporaryDirectory() as directory:
             store = RecordingStore(directory)
             builder = RecordingBuilder("hello")
             builder.add(1, (0,) * 8)
-            with patch("app.recording.os.replace", side_effect=OSError("disk failed")):
+            with patch("app.recording.os.link", side_effect=OSError("disk failed")):
                 with self.assertRaisesRegex(StorageError, "could not atomically save"):
                     store.save(builder.build())
             self.assertFalse((Path(directory) / "hello.json").exists())
+            self.assertEqual(list(Path(directory).glob("*.tmp")), [])
+
+    def test_atomic_publication_does_not_clobber_a_concurrent_recording(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecordingStore(directory)
+            winner = RecordingBuilder("hello")
+            winner.add(1, (0,) * 8)
+            winning_recording = winner.build()
+            store.save(winning_recording)
+
+            contender = RecordingBuilder("hello")
+            contender.add(2, (1,) * 8)
+            # Simulate another process creating hello.json after this process's
+            # preflight observation but before its publication operation.
+            with patch("app.recording.Path.exists", return_value=False):
+                with self.assertRaisesRegex(StorageError, "already exists"):
+                    store.save(contender.build())
+
+            self.assertEqual(store.load("hello"), winning_recording)
             self.assertEqual(list(Path(directory).glob("*.tmp")), [])
 
     def test_invalid_file_is_an_identifiable_error(self):

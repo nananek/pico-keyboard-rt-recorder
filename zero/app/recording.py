@@ -123,7 +123,7 @@ def parse_recording(value: Any, *, expected_name: str | None = None) -> Recordin
 
 
 class RecordingStore:
-    """A directory of JSON v1 recordings, published with atomic replacement."""
+    """A directory of JSON v1 recordings, published atomically without clobbering."""
 
     def __init__(self, directory: str | Path):
         self.directory = Path(directory)
@@ -136,8 +136,6 @@ class RecordingStore:
 
     def save(self, recording: Recording) -> Path:
         path = self.path_for(recording.name)
-        if path.exists():
-            raise StorageError(f"recording already exists: {recording.name}")
         try:
             self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
             file_descriptor, temporary_name = tempfile.mkstemp(
@@ -150,13 +148,15 @@ class RecordingStore:
                     handle.write("\n")
                     handle.flush()
                     os.fsync(handle.fileno())
-                # The temporary file is created in self.directory, so replace is same-filesystem.
-                os.replace(temporary_path, path)
-            except Exception:
+                # The temporary file is fully written in the target directory. link()
+                # publishes its inode only if another writer has not taken the name.
+                os.link(temporary_path, path)
+            finally:
                 temporary_path.unlink(missing_ok=True)
-                raise
         except StorageError:
             raise
+        except FileExistsError as error:
+            raise StorageError(f"recording already exists: {recording.name}") from error
         except OSError as error:
             raise StorageError(f"could not atomically save recording {recording.name}: {error}") from error
         return path
