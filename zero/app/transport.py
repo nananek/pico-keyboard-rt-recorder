@@ -40,30 +40,36 @@ class PicoTransport:
         self.decoder = IncrementalDecoder()
         self._pending: deque[Frame] = deque()
 
-    def set_mode(self, target_mode: int, *, timeout: float) -> None:
+    def set_mode(self, target_mode: int, *, timeout: float, retries: int = 1) -> None:
         if target_mode not in (0, 1, 2):
             raise ProtocolError(f"MODE_SET target must be PASS, RECORD, or ARMED; got {target_mode}")
-        self._write(encode_frame(MODE_SET, bytes((target_mode,))))
-        deadline = self.clock() + timeout
-        deferred: list[Frame] = []
-        try:
-            while True:
-                remaining = deadline - self.clock()
-                if remaining <= 0:
-                    raise TransportTimeout(f"timed out waiting for MODE_CHANGED({target_mode})")
-                frame = self.require_not_error(self.receive_frame(timeout=remaining))
-                if frame.message_type != MODE_CHANGED:
-                    # Events can precede the acknowledgement in the same serial read.
-                    # Retain them for the recording session without repeatedly reading
-                    # the same queued frame while awaiting MODE_CHANGED.
-                    deferred.append(frame)
-                    continue
-                state, reason = validate_mode_changed(frame)
-                if state == target_mode and reason == REASON_OK:
-                    return
-                raise ModeRejected(f"Pico rejected MODE_SET({target_mode}): state={state}, reason={reason}")
-        finally:
-            self._pending.extendleft(reversed(deferred))
+        if retries < 0:
+            raise ProtocolError("MODE_SET retries must not be negative")
+        for attempt in range(retries + 1):
+            self._write(encode_frame(MODE_SET, bytes((target_mode,))))
+            deadline = self.clock() + timeout
+            deferred: list[Frame] = []
+            try:
+                while True:
+                    remaining = deadline - self.clock()
+                    if remaining <= 0:
+                        raise TransportTimeout(f"timed out waiting for MODE_CHANGED({target_mode})")
+                    frame = self.require_not_error(self.receive_frame(timeout=remaining))
+                    if frame.message_type != MODE_CHANGED:
+                        # Events can precede the acknowledgement in the same serial read.
+                        # Retain them for the recording session without repeatedly reading
+                        # the same queued frame while awaiting MODE_CHANGED.
+                        deferred.append(frame)
+                        continue
+                    state, reason = validate_mode_changed(frame)
+                    if state == target_mode and reason == REASON_OK:
+                        return
+                    raise ModeRejected(f"Pico rejected MODE_SET({target_mode}): state={state}, reason={reason}")
+            except TransportTimeout:
+                if attempt == retries:
+                    raise
+            finally:
+                self._pending.extendleft(reversed(deferred))
 
     def receive_frame(self, *, timeout: float) -> Frame:
         if self._pending:
@@ -84,6 +90,17 @@ class PicoTransport:
                     return self._pending.popleft()
             if self.clock() >= deadline:
                 raise TransportTimeout("timed out waiting for Pico UART data")
+
+    def drain_pending_frames(self) -> list[Frame]:
+        """Return frames already read from UART, preserving wire order.
+
+        A mode acknowledgement can share a serial read with RECORD_EVENT
+        frames that preceded it.  Callers completing a recording consume
+        those frames before publishing the result.
+        """
+        frames = list(self._pending)
+        self._pending.clear()
+        return frames
 
     def _write(self, data: bytes) -> None:
         try:

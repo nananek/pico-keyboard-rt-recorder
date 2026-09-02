@@ -9,7 +9,7 @@ import sys
 from typing import Sequence
 
 from .errors import ModeRejected, RecorderError, StorageError, TransportTimeout
-from .recording import RecordingStore
+from .recording import RecordingStore, validate_name
 from .service import RecordingSession, stop_pico
 from .transport import PicoTransport
 
@@ -63,8 +63,9 @@ def _open_transport(device: str, baud: int) -> tuple[PicoTransport, object]:
 
 
 def _run_record(args: argparse.Namespace) -> int:
+    name = validate_name(args.name)
     transport, stream = _open_transport(args.device, args.baud)
-    session = RecordingSession(transport, RecordingStore(args.recordings_dir), args.name, mode_timeout=args.mode_timeout)
+    session = RecordingSession(transport, RecordingStore(args.recordings_dir), name, mode_timeout=args.mode_timeout)
     completed = False
     try:
         session.start()

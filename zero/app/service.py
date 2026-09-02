@@ -41,8 +41,14 @@ class RecordingSession:
     def stop(self) -> Recording:
         if self.finished:
             raise RecorderError("recording session has already finished")
+        if not self.started:
+            raise RecorderError("recording session has not started")
         try:
             self.transport.set_mode(MODE_PASS, timeout=self.mode_timeout)
+            # MODE_CHANGED(PASS) follows any RECORD_EVENTs already queued by
+            # Pico.  set_mode preserves them, so include them before saving.
+            for frame in self.transport.drain_pending_frames():
+                self.consume(self.transport.require_not_error(frame))
         except RecorderError:
             self.finished = True
             raise

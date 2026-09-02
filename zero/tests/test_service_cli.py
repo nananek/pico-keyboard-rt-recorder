@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from app import cli
-from app.errors import ModeRejected, PicoError, ProtocolError, TransportTimeout
+from app.errors import ModeRejected, PicoError, ProtocolError, RecorderError, TransportTimeout
 from app.recording import RecordingStore
 from app.service import RecordingSession
 from app.transport import PicoTransport
@@ -48,7 +48,47 @@ class FakeStream:
         self.closed = True
 
 
+class ManualClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+class TimeoutThenFrameStream(FakeStream):
+    def __init__(self, frame, clock):
+        super().__init__([])
+        self.frame = frame
+        self.clock = clock
+        self.read_count = 0
+
+    def read(self, _size=1):
+        self.read_count += 1
+        if self.read_count == 1:
+            self.clock.now += 1.0
+            return b""
+        return self.frame
+
+
 class ServiceAndCliTests(unittest.TestCase):
+    def test_mode_handshake_retries_when_acknowledgement_is_missing(self):
+        clock = ManualClock()
+        stream = TimeoutThenFrameStream(mode_changed(MODE_RECORD), clock)
+        transport = PicoTransport(stream, clock=clock)
+
+        transport.set_mode(MODE_RECORD, timeout=1.0)
+
+        self.assertEqual(len(stream.writes), 2)
+
+    def test_stop_requires_a_successful_record_start(self):
+        stream = FakeStream([])
+        with tempfile.TemporaryDirectory() as directory:
+            session = RecordingSession(PicoTransport(stream), RecordingStore(directory), "hello")
+            with self.assertRaisesRegex(RecorderError, "has not started"):
+                session.stop()
+        self.assertEqual(stream.writes, [])
+
     def test_mode_handshake_preserves_event_before_ack_and_persists_after_pass(self):
         stream = FakeStream(
             [
@@ -63,6 +103,21 @@ class ServiceAndCliTests(unittest.TestCase):
             session.receive_and_consume(timeout=0.1)
             recording = session.stop()
             self.assertEqual([event.dt_us for event in recording.events], [0, 40])
+            self.assertEqual(RecordingStore(directory).load("hello"), recording)
+        self.assertEqual(len(stream.writes), 2)
+
+    def test_stop_persists_reports_queued_before_pass_ack(self):
+        stream = FakeStream(
+            [
+                mode_changed(MODE_RECORD),
+                record_event(100, (0,) * 8) + record_event(160, (1,) * 8) + mode_changed(MODE_PASS),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            session = RecordingSession(PicoTransport(stream), RecordingStore(directory), "hello")
+            session.start()
+            recording = session.stop()
+            self.assertEqual([event.dt_us for event in recording.events], [0, 60])
             self.assertEqual(RecordingStore(directory).load("hello"), recording)
         self.assertEqual(len(stream.writes), 2)
 
@@ -152,6 +207,15 @@ class ServiceAndCliTests(unittest.TestCase):
             stored = RecordingStore(directory).load("hello")
             self.assertEqual([event.dt_us for event in stored.events], [0, 20])
         self.assertTrue(stream.closed)
+
+    def test_cli_rejects_invalid_name_before_opening_serial(self):
+        with patch("app.cli._open_transport") as open_transport:
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                status = cli.main(["record", "../escape", "--device", "fake"])
+        self.assertEqual(status, 3)
+        open_transport.assert_not_called()
+        self.assertIn('"ok":false', stderr.getvalue())
 
 
 if __name__ == "__main__":
