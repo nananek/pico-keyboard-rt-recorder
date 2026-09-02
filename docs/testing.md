@@ -19,6 +19,20 @@ clear accepted physical input.
 the normal and HID-demo Pico SDK builds with TinyUSB's pinned Pico-PIO-USB
 dependency.
 
+The Zero recorder host checks require only Python's standard-library unittest
+runner (PySerial is needed only when opening a real serial device):
+
+```sh
+cd zero
+python3 -m unittest discover -s tests -v
+```
+
+They cover UART v2 CRC/framing, byte-by-byte and multi-frame reads,
+resynchronisation after invalid frames, mode handshakes, Pico timestamps to
+JSON v1 deltas, duplicate/release persistence, schema/name validation, and
+atomic-write failure cleanup. They also verify that rejected, timed-out, bad
+frame, and Pico ERROR recordings are not published and that PASS is attempted.
+
 ## Hardware acceptance
 
 1. Verify the fixed wiring: UART0 GP0 TX/GP1 RX crossed to the Zero with common
@@ -42,3 +56,22 @@ dependency.
 
 UART event time is not used as a HID deadline. Playback timing must be checked
 against the Pico hardware timer in the later playback acceptance phase.
+
+## Zero recorder acceptance
+
+1. On the Zero, install `zero/requirements.txt`; connect UART0 to Pico UART0
+   (crossed TX/RX with common ground) and identify the serial device, normally
+   `/dev/serial0`.
+2. Run `PYTHONPATH=zero python3 -m app --recordings-dir zero/recordings record hello --device /dev/serial0`.
+   Confirm Pico replies `MODE_CHANGED(RECORD, OK)` and physical keys no longer
+   reach the PC.
+3. Press/release a normal key, a modifier, and simultaneous keys; then press
+   Ctrl-C. Confirm `MODE_CHANGED(PASS, OK)`, the CLI JSON success result, and
+   the all-release behaviour at the PC.
+4. Restart the CLI. Run `list` and `dump hello`; confirm the JSON v1 first
+   `dt_us` is zero, following deltas and `duration_us` reflect Pico timestamps,
+   and press/release/duplicate reports remain present.
+5. While a second recording is active, test Ctrl-C and UART disconnect. In
+   both cases confirm the recorder attempts PASS before serial close and that
+   no new partial JSON file appears. Reconnect and explicitly run `stop` if
+   the disconnect prevented acknowledgement.
