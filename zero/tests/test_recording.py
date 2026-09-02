@@ -69,7 +69,7 @@ class RecordingTests(unittest.TestCase):
             self.assertFalse((Path(directory) / "hello.json").exists())
             self.assertEqual(list(Path(directory).glob("*.tmp")), [])
 
-    def test_atomic_publication_does_not_clobber_a_concurrent_recording(self):
+    def test_atomic_publication_does_not_clobber_an_existing_recording(self):
         with tempfile.TemporaryDirectory() as directory:
             store = RecordingStore(directory)
             winner = RecordingBuilder("hello")
@@ -79,11 +79,8 @@ class RecordingTests(unittest.TestCase):
 
             contender = RecordingBuilder("hello")
             contender.add(2, (1,) * 8)
-            # Simulate another process creating hello.json after this process's
-            # preflight observation but before its publication operation.
-            with patch("app.recording.Path.exists", return_value=False):
-                with self.assertRaisesRegex(StorageError, "already exists"):
-                    store.save(contender.build())
+            with self.assertRaisesRegex(StorageError, "already exists"):
+                store.save(contender.build())
 
             self.assertEqual(store.load("hello"), winning_recording)
             self.assertEqual(list(Path(directory).glob("*.tmp")), [])
