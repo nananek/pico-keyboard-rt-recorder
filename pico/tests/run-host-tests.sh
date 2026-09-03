@@ -30,6 +30,10 @@ build_and_run keyboard_capture \
     "$test_root/../src/keyboard_capture.c" \
     "$test_root/keyboard_capture_test.c"
 
+build_and_run playback_queue \
+    "$test_root/../src/playback_queue.c" \
+    "$test_root/playback_queue_test.c"
+
 build_and_run uart_protocol \
     "$test_root/../src/uart_protocol.c" \
     "$test_root/uart_protocol_test.c"
