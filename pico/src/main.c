@@ -13,6 +13,7 @@
 #include "keyboard_capture.h"
 #include "mode_state.h"
 #include "physical_report_dispatch.h"
+#include "playback_queue.h"
 #include "safety_release.h"
 #include "uart_protocol.h"
 #include "uart_transport.h"
@@ -21,6 +22,7 @@ static pico_keyboard_capture_t keyboard_capture;
 static pico_uart_transport_t uart_transport;
 static pico_mode_state_t mode_state;
 static pico_safety_release_t safety_release;
+static pico_playback_queue_t playback_queue;
 
 static void mode_all_release(void *user) {
     (void)user;
@@ -35,6 +37,11 @@ static bool send_all_keys_release(void *user) {
 static void mode_clear_physical(void *user) {
     (void)user;
     pico_keyboard_capture_clear(&keyboard_capture);
+}
+
+static void mode_clear_queue(void *user) {
+    (void)user;
+    pico_playback_queue_clear(&playback_queue);
 }
 
 static void mode_changed(void *user, uint8_t state, uint8_t reason) {
@@ -81,6 +88,66 @@ static void send_status(void) {
         &uart_transport, PICO_UART_PICO_STATUS, payload, sizeof(payload));
 }
 
+static void send_buffer_status(void) {
+    const uint16_t queued_count =
+        (uint16_t)pico_playback_queue_count(&playback_queue);
+    const uint16_t free_capacity =
+        (uint16_t)pico_playback_queue_free_capacity(&playback_queue);
+    const uint8_t payload[5] = {
+        pico_mode_state_get(&mode_state),
+        (uint8_t)(queued_count & 0xFFu),
+        (uint8_t)(queued_count >> 8),
+        (uint8_t)(free_capacity & 0xFFu),
+        (uint8_t)(free_capacity >> 8),
+    };
+    (void)pico_uart_transport_queue_frame(
+        &uart_transport, PICO_UART_BUFFER_STATUS, payload, sizeof(payload));
+}
+
+/* QUEUE_CLEAR/QUEUE_EVENT/QUEUE_END load the fixed-capacity playback queue.
+ * They are accepted only in ARMED, matching where PLAY_START is accepted; any
+ * other state is a protocol error, consistent with how this dispatcher
+ * already treats unexpected commands. */
+static void dispatch_queue_command(const pico_uart_frame_t *frame) {
+    if (pico_mode_state_get(&mode_state) != PICO_UART_MODE_ARMED) {
+        pico_mode_state_protocol_error(&mode_state);
+        return;
+    }
+    switch (frame->type) {
+        case PICO_UART_QUEUE_CLEAR:
+            pico_playback_queue_clear(&playback_queue);
+            send_buffer_status();
+            break;
+        case PICO_UART_QUEUE_EVENT: {
+            /* offset_us u64 LE, report_len u8 (8), then the 8-byte report:
+             * the same 17-byte shape as RECORD_EVENT, mirrored in direction.
+             * The transport layer already guarantees this shape (17 bytes,
+             * payload[8] == 8) before a command reaches dispatch. */
+            uint64_t offset_us = 0u;
+            for (unsigned i = 0; i < 8u; ++i) {
+                offset_us |= (uint64_t)frame->payload[i] << (8u * i);
+            }
+            if (!pico_playback_queue_push(
+                    &playback_queue, offset_us, frame->payload + 9u, 8u)) {
+                /* The queue is full: Zero sent beyond the capacity most
+                 * recently advertised in BUFFER_STATUS. Treat this like any
+                 * other protocol contract violation. */
+                pico_mode_state_protocol_error(&mode_state);
+                break;
+            }
+            send_buffer_status();
+            break;
+        }
+        case PICO_UART_QUEUE_END:
+            (void)pico_uart_transport_queue_frame(
+                &uart_transport, PICO_UART_PLAY_READY, NULL, 0u);
+            send_buffer_status();
+            break;
+        default:
+            break;
+    }
+}
+
 static void dispatch_command(const pico_uart_frame_t *frame) {
     switch (frame->type) {
         case PICO_UART_MODE_SET:
@@ -103,8 +170,9 @@ static void dispatch_command(const pico_uart_frame_t *frame) {
         case PICO_UART_QUEUE_CLEAR:
         case PICO_UART_QUEUE_EVENT:
         case PICO_UART_QUEUE_END:
+            dispatch_queue_command(frame);
+            break;
         default:
-            /* Playback queue support is intentionally not enabled yet. */
             pico_mode_state_protocol_error(&mode_state);
             break;
     }
@@ -146,9 +214,11 @@ int main(void) {
     pico_keyboard_capture_init(&keyboard_capture);
     pico_uart_transport_init(&uart_transport);
     pico_safety_release_init(&safety_release);
+    pico_playback_queue_init(&playback_queue);
     const pico_mode_state_callbacks_t callbacks = {
         .all_release = mode_all_release,
         .clear_physical = mode_clear_physical,
+        .clear_queue = mode_clear_queue,
         .mode_changed = mode_changed,
         .user = &uart_transport,
     };

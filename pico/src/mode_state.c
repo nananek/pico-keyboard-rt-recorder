@@ -17,6 +17,16 @@ static void clear_and_release(pico_mode_state_t *mode) {
     }
 }
 
+// Same as clear_and_release, plus discarding the playback queue. PLAY_START
+// must not use this: it transitions ARMED to PLAYING and the queue loaded
+// during ARMED is exactly what the scheduler needs to drain.
+static void clear_release_and_queue(pico_mode_state_t *mode) {
+    if (mode->callbacks.clear_queue != NULL) {
+        mode->callbacks.clear_queue(mode->callbacks.user);
+    }
+    clear_and_release(mode);
+}
+
 void pico_mode_state_init(
     pico_mode_state_t *mode,
     const pico_mode_state_callbacks_t *callbacks) {
@@ -54,7 +64,7 @@ bool pico_mode_state_handle_mode_set(pico_mode_state_t *mode, uint8_t target) {
     }
     if (target == PICO_UART_MODE_PASS) {
         if (mode->state != PICO_UART_MODE_PASS) {
-            clear_and_release(mode);
+            clear_release_and_queue(mode);
             mode->state = PICO_UART_MODE_PASS;
         }
         notify(mode, PICO_UART_REASON_OK);
@@ -66,7 +76,7 @@ bool pico_mode_state_handle_mode_set(pico_mode_state_t *mode, uint8_t target) {
     }
     if ((target == PICO_UART_MODE_RECORD || target == PICO_UART_MODE_ARMED) &&
         mode->state == PICO_UART_MODE_PASS) {
-        clear_and_release(mode);
+        clear_release_and_queue(mode);
         mode->state = target;
         notify(mode, PICO_UART_REASON_OK);
         return true;
@@ -96,7 +106,7 @@ bool pico_mode_state_play_abort(pico_mode_state_t *mode) {
         }
         return false;
     }
-    clear_and_release(mode);
+    clear_release_and_queue(mode);
     mode->state = PICO_UART_MODE_ARMED;
     notify(mode, PICO_UART_REASON_ABORTED);
     return true;
@@ -110,7 +120,7 @@ static void enter_error(pico_mode_state_t *mode, uint8_t reason) {
         // Once ERROR has blocked physical input and released the PC state,
         // later transport faults have no additional state to make safe.
         if (mode->state != PICO_UART_MODE_ERROR) {
-            clear_and_release(mode);
+            clear_release_and_queue(mode);
             mode->state = PICO_UART_MODE_ERROR;
         }
     }
