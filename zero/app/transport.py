@@ -4,18 +4,24 @@ from __future__ import annotations
 
 from collections import deque
 import time
-from typing import Protocol
+from typing import Iterable, Protocol
 
 from .errors import ModeRejected, PicoError, ProtocolError, TransportTimeout
 from .uart_protocol import (
+    BUFFER_STATUS,
     ERROR,
     MODE_CHANGED,
     MODE_ERROR,
     PICO_STATUS,
+    PLAY_READY,
     REASON_OK,
     Frame,
     IncrementalDecoder,
     encode_frame,
+    encode_queue_clear,
+    encode_queue_end,
+    encode_queue_event,
+    validate_buffer_status,
     validate_mode_changed,
     validate_pico_status,
     MODE_SET,
@@ -70,6 +76,47 @@ class PicoTransport:
                     raise
             finally:
                 self._pending.extendleft(reversed(deferred))
+
+    def queue_events(self, events: Iterable[tuple[int, bytes]], *, timeout: float) -> None:
+        """Load the Pico playback queue, respecting Pico-advertised capacity.
+
+        Sends QUEUE_CLEAR, then one QUEUE_EVENT per (offset_us, report) pair
+        while staying within the free_capacity most recently reported by
+        BUFFER_STATUS, then QUEUE_END and waits for PLAY_READY. Valid only
+        while Pico is ARMED. This does not prebuffer or stream events during
+        PLAYING -- that is the Zero playback feeder (a later phase).
+        """
+        self._write(encode_queue_clear())
+        _, _, free_capacity = validate_buffer_status(self._await(BUFFER_STATUS, timeout=timeout))
+        for offset_us, report in events:
+            if free_capacity <= 0:
+                raise ProtocolError("Pico playback queue is full; cannot queue more events")
+            self._write(encode_queue_event(offset_us, report))
+            _, _, free_capacity = validate_buffer_status(self._await(BUFFER_STATUS, timeout=timeout))
+        self._write(encode_queue_end())
+        self._await(PLAY_READY, timeout=timeout)
+
+    def _await(self, message_type: int, *, timeout: float) -> Frame:
+        """Wait for a specific message type, deferring any other frames.
+
+        Mirrors set_mode's wait loop: frames of a different type (e.g. a
+        RECORD_EVENT interleaved with a queue-loading exchange) are retained
+        in arrival order for later callers instead of being discarded.
+        """
+        deadline = self.clock() + timeout
+        deferred: list[Frame] = []
+        try:
+            while True:
+                remaining = deadline - self.clock()
+                if remaining <= 0:
+                    raise TransportTimeout(f"timed out waiting for message 0x{message_type:02x}")
+                frame = self.require_not_error(self.receive_frame(timeout=remaining))
+                if frame.message_type != message_type:
+                    deferred.append(frame)
+                    continue
+                return frame
+        finally:
+            self._pending.extendleft(reversed(deferred))
 
     def receive_frame(self, *, timeout: float) -> Frame:
         if self._pending:
