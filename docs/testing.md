@@ -3,17 +3,22 @@
 ## Automated checks
 
 `sh pico/tests/run-host-tests.sh` builds with `-Wall -Wextra -Werror` and runs
-the report layout, pin contract, capture FIFO, UART protocol/CRC, UART ring and
-parser, mode transition, and host adapter tests. These cover split frames,
-bad magic/version/length/CRC, unknown direction/type, ring order and overflow,
-command/TX-ring saturation, idempotent MODE_SET, invalid targets/transitions,
-all-release retry/queue clearing, and physical input blocking. The main-output
-integration test verifies that PASS keeps its FIFO through a failed release,
-the release-sent iteration, and a normal HID-not-ready result; it also verifies
-that RECORD drains to UART while HID output is blocked. Only a validated command
-can request a mode change. In particular, a repeated PASS command and a
-transport or malformed-frame fault received in PASS do not release a held key or
-clear accepted physical input.
+the report layout, pin contract, capture FIFO, playback queue, UART
+protocol/CRC, UART ring and parser, mode transition, and host adapter tests.
+These cover split frames, bad magic/version/length/CRC, unknown
+direction/type, ring order and overflow, command/TX-ring saturation,
+idempotent MODE_SET, invalid targets/transitions, all-release retry/queue
+clearing, and physical input blocking. The playback queue test covers FIFO
+order, capacity rejection, and clearing. The mode transition test also proves
+that `PLAY_START` releases physical input like any other transition but does
+not discard the playback queue it is about to consume, while `PLAY_ABORT` and
+any fault entering ERROR do. The main-output integration test verifies that
+PASS keeps its FIFO through a failed release, the release-sent iteration, and
+a normal HID-not-ready result; it also verifies that RECORD drains to UART
+while HID output is blocked. Only a validated command can request a mode
+change. In particular, a repeated PASS command and a transport or
+malformed-frame fault received in PASS do not release a held key or clear
+accepted physical input.
 
 `git diff --check` is required before commit. Docker CI additionally performs
 the normal and HID-demo Pico SDK builds with TinyUSB's pinned Pico-PIO-USB
@@ -32,6 +37,10 @@ resynchronisation after invalid frames, mode handshakes, Pico timestamps to
 JSON v1 deltas, duplicate/release persistence, schema/name validation, and
 atomic-write failure cleanup. They also verify that rejected, timed-out, bad
 frame, and Pico ERROR recordings are not published and that PASS is attempted.
+They also cover `QUEUE_CLEAR`/`QUEUE_EVENT`/`QUEUE_END` encoding and
+`BUFFER_STATUS` validation, and that `PicoTransport.queue_events()` paces
+`QUEUE_EVENT` sends within the Pico-advertised `free_capacity` and surfaces a
+protocol error rather than exceeding it.
 
 ## Hardware acceptance
 
@@ -48,7 +57,17 @@ frame, and Pico ERROR recordings are not published and that PASS is attempted.
    forwarded report.
 5. Verify `MODE_SET(ARMED)`, `PLAY_START`, and `PLAY_ABORT` transitions. Physical
    reports remain blocked in ARMED/PLAYING, and abort releases all keys.
-6. Inject bad CRC/version/length bytes and UART framing errors. Confirm ERROR,
+6. While ARMED, send `QUEUE_CLEAR`, then several `QUEUE_EVENT` frames, then
+   `QUEUE_END`. Confirm a `BUFFER_STATUS` reply after each queue command with
+   `queued_count`/`free_capacity` tracking the pushes, and a single
+   `PLAY_READY` after `QUEUE_END`. Send `QUEUE_EVENT` frames past the
+   advertised `free_capacity` and confirm ERROR (all-release, blocked input,
+   queue discarded) rather than a silently dropped event. Send a queue command
+   while in PASS or RECORD and confirm the same wrong-state protocol-error
+   behaviour as any other unexpected command. Confirm `PLAY_START` after a
+   fresh `QUEUE_CLEAR`/`QUEUE_EVENT`/`QUEUE_END` load does not itself trigger
+   another `BUFFER_STATUS` or clear the just-loaded queue.
+7. Inject bad CRC/version/length bytes and UART framing errors. Confirm ERROR,
    all-release, blocked input, and recovery only after a valid
    `MODE_SET(PASS)` while ARMED or PLAYING. In PASS, confirm the same malformed
    input leaves a held key intact while reporting the fault. Disconnect/reconnect
