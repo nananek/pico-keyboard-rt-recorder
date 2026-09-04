@@ -69,7 +69,15 @@ directory.
 
 The optional `PICO_HID_DEMO_TEST=ON` build sends one safe A press/release after
 device enumeration. The normal firmware is UART-enabled and has no textual
-capture diagnostic. Docker reproduces host tests and normal/demo UF2 builds:
+capture diagnostic.
+
+The optional `PICO_PLAYBACK_SCHED_TEST=ON` build is a self-contained playback
+scheduler benchmark: with no UART traffic attached, it drives itself through
+PASS -> ARMED -> `PLAY_START` and dispatches 1000 synthetic events at a 10 ms
+nominal spacing, then reports the resulting `PLAY_FINISHED`/`PLAY_METRICS`
+pair over UART0 for the real-time acceptance record described in
+[docs/testing.md](docs/testing.md) (hardware acceptance step 11). Docker
+reproduces host tests and normal/demo UF2 builds:
 
 ```sh
 docker build --target verify --tag pico-keyboard-verify .

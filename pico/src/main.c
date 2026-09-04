@@ -243,12 +243,17 @@ static void dispatch_command(const pico_uart_frame_t *frame) {
             // the scheduler's deadlines agree on the same origin.
             const uint64_t playback_start_us = time_us_64();
             if (pico_mode_state_play_start(&mode_state)) {
-                pico_playback_scheduler_start(&playback_scheduler, playback_start_us);
+                // Queue PLAY_STARTED before starting the scheduler: an
+                // empty queue makes pico_playback_scheduler_start() finish
+                // the run synchronously (PLAY_FINISHED/PLAY_METRICS/
+                // MODE_CHANGED), and that must not reach the wire ahead of
+                // PLAY_STARTED for the same run.
                 uint8_t payload[8];
                 write_u64_le(payload, playback_start_us);
                 (void)pico_uart_transport_queue_frame(
                     &uart_transport, PICO_UART_PLAY_STARTED, payload,
                     sizeof(payload));
+                pico_playback_scheduler_start(&playback_scheduler, playback_start_us);
             }
             break;
         }

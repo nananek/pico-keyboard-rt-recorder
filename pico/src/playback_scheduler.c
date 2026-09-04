@@ -114,6 +114,7 @@ static bool arm_next(pico_playback_scheduler_t *scheduler) {
     if (scheduler->alarm_armed) {
         (void)cancel_alarm(scheduler->alarm_id);
         scheduler->alarm_armed = false;
+        atomic_store_explicit(&scheduler->alarm_fired, false, memory_order_relaxed);
     }
     pico_playback_queue_event_t event;
     if (!pico_playback_queue_peek(scheduler->queue, &event)) {
@@ -210,8 +211,17 @@ void pico_playback_scheduler_task(pico_playback_scheduler_t *scheduler) {
         }
         (void)pico_playback_queue_pop(scheduler->queue, &event);
         const uint64_t dispatch_time_us = time_us_64();
-        const int64_t lateness_us =
+        int64_t lateness_us =
             (int64_t)dispatch_time_us - (int64_t)scheduler->next_deadline_us;
+        // A HID-not-ready retry above can stall for a very long time without
+        // advancing next_deadline_us; clamp before narrowing so an overflow
+        // cannot silently wrap into a negative int32_t and corrupt the
+        // recorded min/max/percentiles.
+        if (lateness_us > INT32_MAX) {
+            lateness_us = INT32_MAX;
+        } else if (lateness_us < INT32_MIN) {
+            lateness_us = INT32_MIN;
+        }
         record_lateness(scheduler, (int32_t)lateness_us);
         if (!arm_next(scheduler)) {
             return;  // Queue drained: arm_next() already called finish().
