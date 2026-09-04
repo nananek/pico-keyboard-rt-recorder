@@ -363,6 +363,62 @@ class ControllerConcurrencyTests(unittest.TestCase):
             stop_thread.join(timeout=5.0)
             self.assertFalse(stop_thread.is_alive())
 
+    def test_stop_is_not_silently_swallowed_when_session_is_superseded_mid_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stream = LiveStream()
+            transport = PicoTransport(stream)
+            controller = Controller(transport, RecordingStore(directory), record_poll_interval=0.02)
+
+            stream.push(mode_changed(MODE_RECORD))
+            first = controller.start_recording("first")
+            self.assertEqual(first["state"], "RECORD")
+
+            # _request_stop reads self._stop_event/_worker/_generation under
+            # the lock, then (outside the lock) calls stop_event.set(). This
+            # patches that specific call to reproduce the exact race in that
+            # unlocked window: the "first" session dies on its own (a
+            # genuine ProtocolError, unrelated to this stop request) and a
+            # brand new "second" session starts, before the signal is sent.
+            stale_stop_event = controller._stop_event
+            real_set = stale_stop_event.set
+
+            def racing_set():
+                stream.push(mode_changed(MODE_PASS))  # unexpected mid-record -> ProtocolError
+                stream.push(mode_changed(MODE_PASS))  # ack for its abort()'s MODE_SET(PASS)
+                self.assertTrue(wait_until(lambda: controller.status()["active"] is None))
+
+                stream.push(mode_changed(MODE_RECORD))
+                second = controller.start_recording("second")
+                self.assertEqual(second["state"], "RECORD")
+
+                real_set()
+
+            stale_stop_event.set = racing_set
+
+            with self.assertRaisesRegex(RecorderError, "ended on its own"):
+                controller.stop_recording(timeout=5.0)
+
+            # "second" must be unaffected: still active, not silently
+            # reported as stopped just because "first"'s slots were reused.
+            status = controller.status()
+            self.assertEqual(status["active"], "record")
+            self.assertEqual(status["name"], "second")
+
+            # Clean up the still-running "second" session.
+            stop_result = {}
+
+            def do_stop():
+                stop_result["response"] = controller.stop_recording(timeout=5.0)
+
+            stop_thread = threading.Thread(target=do_stop)
+            stop_thread.start()
+            # writes so far: MODE_SET(RECORD) first, MODE_SET(PASS) abort,
+            # MODE_SET(RECORD) second; next is MODE_SET(PASS) for this stop.
+            self.assertTrue(wait_until(lambda: len(stream.writes) >= 4))
+            stream.push(mode_changed(MODE_PASS))
+            stop_thread.join(timeout=5.0)
+            self.assertFalse(stop_thread.is_alive())
+
 
 if __name__ == "__main__":
     unittest.main()

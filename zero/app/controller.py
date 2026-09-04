@@ -56,6 +56,12 @@ class Controller:
         self._stop_event: threading.Event | None = None
         self._last_error: Exception | None = None
         self._last_result: dict[str, object] | None = None
+        # Bumped by every _begin(); lets _request_stop detect that the
+        # session it captured a worker/stop_event for has already finished
+        # on its own (e.g. a spontaneous ProtocolError) *and* a new session
+        # has since started, so self._last_error/_last_result now belong to
+        # that new session rather than the one being stopped.
+        self._generation = 0
 
     # -- status -----------------------------------------------------------
 
@@ -76,6 +82,12 @@ class Controller:
         session: RecordingSession | None = None
         try:
             session = RecordingSession(self.transport, self.store, name, mode_timeout=self.mode_timeout)
+            # Reflect intent before the blocking handshake, same as
+            # start_playback does for ARMED: a concurrent status() poll
+            # during the handshake should see RECORD, not a stale PASS.
+            with self._meta_lock:
+                self._session = session
+                self._state = STATE_RECORD
             session.start()
         except Exception:
             # Mirror the CLI: always attempt the idempotent MODE_SET(PASS)
@@ -98,9 +110,7 @@ class Controller:
         return response
 
     def stop_recording(self, *, timeout: float = DEFAULT_STOP_TIMEOUT) -> dict[str, object]:
-        self._request_stop("record", timeout)
-        with self._meta_lock:
-            error, result = self._last_error, self._last_result
+        error, result = self._request_stop("record", timeout)
         if error is not None:
             raise error
         return result
@@ -174,9 +184,7 @@ class Controller:
         return response
 
     def stop_playback(self, *, timeout: float = DEFAULT_STOP_TIMEOUT) -> dict[str, object]:
-        self._request_stop("playback", timeout)
-        with self._meta_lock:
-            error, result = self._last_error, self._last_result
+        error, result = self._request_stop("playback", timeout)
         if error is not None:
             raise error
         return result
@@ -274,6 +282,7 @@ class Controller:
             self._active_name = name
             self._last_error = None
             self._last_result = None
+            self._generation += 1
 
     def _end(
         self,
@@ -292,12 +301,13 @@ class Controller:
             self._last_error = error
             self._last_result = result
 
-    def _request_stop(self, kind: str, timeout: float) -> None:
+    def _request_stop(self, kind: str, timeout: float) -> tuple[Exception | None, dict[str, object] | None]:
         with self._meta_lock:
             if self._active_kind != kind:
                 raise RecorderError(f"no {kind} session is active")
             stop_event = self._stop_event
             worker = self._worker
+            generation = self._generation
         if stop_event is None or worker is None:
             # _begin() has claimed active_kind but the session's synchronous
             # mode handshake (between _begin() and the worker thread being
@@ -307,3 +317,15 @@ class Controller:
         worker.join(timeout=timeout)
         if worker.is_alive():
             raise RecorderError(f"{kind} session did not stop within {timeout:g}s")
+        with self._meta_lock:
+            if self._generation != generation:
+                # The session finished on its own (e.g. a spontaneous
+                # ProtocolError) and a new session has since started, all
+                # while this call was blocked between reading stop_event/
+                # worker above and joining it. self._last_error/_last_result
+                # now belong to that new session, not the one we meant to
+                # stop -- returning them would silently misreport it.
+                raise RecorderError(
+                    f"{kind} session ended on its own before it could be stopped; check status"
+                )
+            return self._last_error, self._last_result
