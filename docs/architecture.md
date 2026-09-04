@@ -9,6 +9,9 @@ queue, and presents the control UI. The Zero never supplies a playback clock.
 
 The only control link is framed binary UART0 (Pico GP0 TX / GP1 RX, 921600
 8-N-1). Mode selection is a `MODE_SET (0x87)` command; no GPIO gate is used.
+See `docs/realtime-design.md`'s "Clock configuration and timing accuracy"
+section for the verified `clk_peri`/`clk_ref` chain and jitter bounds behind
+these numbers.
 
 ## Data flow
 

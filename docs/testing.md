@@ -49,8 +49,10 @@ and a transport or malformed-frame fault received in PASS do not release a
 held key or clear accepted physical input.
 
 `git diff --check` is required before commit. Docker CI additionally performs
-the normal and HID-demo Pico SDK builds with TinyUSB's pinned Pico-PIO-USB
-dependency.
+the normal build plus every opt-in diagnostic build (`PICO_HID_DEMO_TEST`,
+`PICO_PLAYBACK_SCHED_TEST`, `PICO_CLOCK_DEBUG_PRINT`) with TinyUSB's pinned
+Pico-PIO-USB dependency, so a compile regression in any of them is caught the
+same way as in the default build.
 
 Most Zero recorder host checks require only Python's standard-library
 unittest runner (PySerial is needed only when opening a real serial device);
@@ -99,6 +101,16 @@ FastAPI lifespan's startup/shutdown `Controller.safe_stop()` reconciliation is
 exercised by every test implicitly, since each one opens and closes an app.
 
 ## Hardware acceptance
+
+Optional, before the numbered sequence below: flash the opt-in clock-debug
+image (`cmake -DPICO_CLOCK_DEBUG_PRINT=ON ...`, see `pico/CMakeLists.txt`)
+to verify the clock chain documented in `docs/realtime-design.md`'s "Clock
+configuration and timing accuracy" section against real hardware. This build
+claims UART0 as SDK stdio instead of the binary protocol -- attach a serial
+terminal (e.g. `screen`/`minicom`) at the SDK's default stdio baud rather
+than the Zero, and never flash it onto a Zero-integrated setup. It prints
+`clk_sys`/`clk_peri`/`clk_ref`/`clk_usb` once at boot, then falls through
+into the normal loop like the other opt-in diagnostic builds below.
 
 1. Verify the fixed wiring: UART0 GP0 TX/GP1 RX crossed to the Zero with common
    ground, PIO-USB GP12 D+/GP13 D-, and protected keyboard VBUS. No mode wire is

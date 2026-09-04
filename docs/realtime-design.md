@@ -9,6 +9,104 @@ The ring holds 512 bytes: more than seven maximum-size 71-byte frames and
 about 5.5 ms of continuous 921600-baud 8-N-1 input, while the main loop's
 normal sleep interval is 1 ms.
 
+## Clock configuration and timing accuracy
+
+Verified against the pinned toolchain (Pico SDK 2.2.0) rather than assumed,
+per Issue #26:
+
+- `clk_peri = 150,000,000 Hz` exactly. The SDK's default
+  `runtime_init_clocks()` (`src/rp2_common/pico_runtime_init/runtime_init_clocks.c`)
+  configures `clk_sys` from an exact-integer PLL multiply of the 12MHz XOSC
+  (FBDIV=125, POSTDIV1 x POSTDIV2=10 -> 150MHz exactly, per RP2350's
+  `platform_defs.h` defaults) and `clk_peri = clk_sys` undivided. Nothing in
+  this repo overrides it: `pico/CMakeLists.txt` has no
+  `set_sys_clock_khz`/`clock_configure` call, and Pico-PIO-USB (pinned via
+  TinyUSB's `get_deps.py`) doesn't require a specific clock either -- its
+  `pio_usb_host.c` reads `clock_get_hz(clk_sys)` at init and computes a
+  fractional PIO clock divider from whatever it is.
+- `clk_ref = 12,000,000 Hz` (the XOSC), undivided. `time_us_64()`'s TICKS
+  block derives from `clk_ref` (`start_all_ticks()`, same SDK file), entirely
+  independent of `clk_sys`/`clk_peri`; 1us hardware resolution. Every
+  timestamp cited in this file (`time_us_64()` at the TinyUSB host callback,
+  `playback_start_us`, deadline math) is therefore unaffected by whatever
+  `clk_peri` ends up driving the UART at.
+- **UART divisor error at 921600 baud:** re-derived from the SDK's actual
+  `uart_set_baudrate()` algorithm (`src/rp2_common/hardware_uart/uart.c`),
+  not an idealized formula. At `clk_peri=150,000,000`: `baud_ibrd=10`,
+  `baud_fbrd=11`, achieved rate `(4x150,000,000)/(64x10+11) =
+  600,000,000/651 ~= 921,659 Hz`, error **+64 ppm (+0.0064%)** -- well inside
+  the ~2% an 8-N-1 frame tolerates before a receiver risks sampling the
+  wrong bit near the end of a byte.
+- **RECORD-mode capture jitter:** `pico/src/main.c`'s main loop calls
+  `tud_task()`/`tuh_task()` once per iteration -- this is where
+  `time_us_64()` is sampled, at `hid_keyboard_host.c:91`, the first line of
+  `tuh_hid_report_received_cb`. Before Issue #26, every non-PLAYING mode
+  slept `sleep_ms(1u)` between iterations, bounding this codebase's own
+  scheduling jitter at up to ~1ms per captured event. RECORD now sleeps
+  `PICO_RECORD_LOOP_INTERVAL_US` (200us, `pico/include/hardware_config.h`)
+  instead, tightening that bound to ~200us (main.c's mode-keyed sleep
+  branch at the end of the loop). Full `tight_loop_contents()` (as used for
+  PLAYING) was considered and rejected for RECORD: a recording's duration is
+  user-controlled and can run far longer than a bounded PLAYING run, so an
+  unbounded 100%-CPU/power cost isn't warranted the way it is for PLAYING's
+  bounded, latency-critical dispatch.
+- **This jitter is layered on top of, not instead of, a separate
+  uncontrollable floor:** Pico-PIO-USB's host role sets each endpoint's
+  polling cadence directly from the connected device's descriptor
+  (`pio_usb_host.c`: `ep->interval = d->interval`, i.e. USB `bInterval`) --
+  a boot-protocol keyboard's own interrupt-endpoint polling interval
+  (commonly several ms) bounds when a report is even available to poll,
+  independent of anything in this codebase or the 200us tightening above.
+  Shrinking this loop's own granularity below that floor has diminishing
+  returns on total physical-key-to-captured-event latency, but it does
+  remove the variance our own scheduling adds on top of whatever that floor
+  is -- the part actually within this project's control, and the part that
+  directly perturbs recorded `dt_us` deltas.
+- **Crystal: Abracon ABM8-272-T3**, confirmed from the official Raspberry Pi
+  Pico 2 Datasheet's schematic (Appendix B, `RP-008299-DS`, labeled
+  directly) and cross-checked against Abracon's own datasheet (issued
+  2024-09-16, Drawing #456603), which lists it as approved for the RP2040
+  and RP235x range. 12.000MHz center frequency; frequency tolerance at
+  +25C **+/-30 ppm**; frequency stability over -40C..+85C (ref. +25C)
+  **+/-30 ppm**; aging **+/-5 ppm/year** (1st year, @25+/-3C). Worst-case
+  combined tolerance+stability (~60 ppm) accumulates ~60us of drift per
+  *second* of elapsed time -- **~60ms accumulated over 1000 seconds
+  (~16.7 minutes)** of continuous recording, not ~60us as a naive reading of
+  "60 ppm over 1000 seconds" might suggest. That accumulation is a slow,
+  smooth systematic skew in the absolute time base, not per-event jitter, so
+  it is the wrong quantity to compare directly against the RECORD-mode
+  jitter bound above (a per-event, non-cumulative noise term): for a
+  typical few-millisecond to few-hundred-millisecond gap between two
+  consecutively captured events, 60 ppm contributes roughly a hundred
+  nanoseconds to a few tens of microseconds of extra `dt_us` error -- one to four
+  orders of magnitude below the jitter bound for realistic inter-keystroke
+  intervals, only approaching the same order of magnitude for an atypical
+  gap near a full second. Crystal drift is not a meaningful contributor to
+  recorded inter-event timing at any recording length this project targets;
+  it would only matter for an absolute wall-clock alignment this project
+  does not attempt.
+- **Hardware-level RX timestamp inside Pico-PIO-USB: investigated, not
+  recommended.** A timestamp taken where `pio_usb.c`'s low-level RX path
+  exits its busy-wait on the PIO hardware IRQ completion flag
+  (`pp->pio_usb_rx->irq & IRQ_RX_COMP_MASK`) would sit closer to the wire
+  than `tuh_hid_report_received_cb`; separately, PIO-USB's SOF generation is
+  already a hardware-alarm-driven timer
+  (`alarm_pool_add_repeating_timer_us(..., -1000, sof_timer, ...)`) and
+  unaffected by main-loop jitter regardless. But threading an extra
+  timestamp through to TinyUSB's fixed `tuh_hid_report_received_cb`
+  signature has no clean extension point -- it would need either a custom
+  TinyUSB HID driver shim or a fragile stashed-global hand-off, patched into
+  two vendored third-party files (`pio_usb.c`/`pio_usb_host.c`, fetched via
+  TinyUSB's `get_deps.py`, not tracked in this repo's own source) and
+  re-verified across every future Pico-PIO-USB version bump. That ongoing
+  maintenance cost, for a precision gain likely already dwarfed by the
+  keyboard's own USB polling-interval floor above, isn't justified.
+
+An opt-in `PICO_CLOCK_DEBUG_PRINT` build (`pico/CMakeLists.txt`,
+`pico/src/clock_debug_test.c`) prints `clk_sys`/`clk_peri`/`clk_ref`/
+`clk_usb` once at boot over UART0-as-stdio, to confirm the values above
+against real hardware; see `docs/testing.md`.
+
 Startup is safe by construction, with no separate hardware watchdog
 involved: `pico_mode_state_init` always zero-initializes the mode state and
 then explicitly sets `PICO_UART_MODE_PASS` before `main()` does anything

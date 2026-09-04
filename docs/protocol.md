@@ -2,7 +2,9 @@
 
 The Pico 2 and Pi Zero 2 W communicate over UART0 at 921600 baud, 8-N-1.
 Pico UART0 TX is GP0 and RX is GP1. The mode is controlled only by framed UART
-commands; there is no separate mode-control wire.
+commands; there is no separate mode-control wire. See
+`docs/realtime-design.md`'s "Clock configuration and timing accuracy" section
+for the verified UART divisor error at this rate.
 
 ## Framing
 

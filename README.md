@@ -116,8 +116,15 @@ scheduler benchmark: with no UART traffic attached, it drives itself through
 PASS -> ARMED -> `PLAY_START` and dispatches 1000 synthetic events at a 10 ms
 nominal spacing, then reports the resulting `PLAY_FINISHED`/`PLAY_METRICS`
 pair over UART0 for the real-time acceptance record described in
-[docs/testing.md](docs/testing.md) (hardware acceptance step 11). Docker
-reproduces host tests and normal/demo UF2 builds:
+[docs/testing.md](docs/testing.md) (hardware acceptance step 11).
+
+The optional `PICO_CLOCK_DEBUG_PRINT=ON` build prints `clk_sys`/`clk_peri`/
+`clk_ref`/`clk_usb` once at boot over UART0-as-stdio, to verify the clock
+chain documented in [docs/realtime-design.md](docs/realtime-design.md)
+("Clock configuration and timing accuracy") against real hardware. It claims
+UART0 for SDK stdio instead of the binary protocol, so it is never flashed
+onto a Zero-integrated setup. Docker reproduces host tests and normal/demo
+UF2 builds:
 
 ```sh
 docker build --target verify --tag pico-keyboard-verify .
