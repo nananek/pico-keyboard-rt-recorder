@@ -22,6 +22,9 @@
 #if PICO_PLAYBACK_SCHED_TEST
 #include "playback_test_source.h"
 #endif
+#if PICO_CLOCK_DEBUG_PRINT
+#include "clock_debug_test.h"
+#endif
 
 static pico_keyboard_capture_t keyboard_capture;
 static pico_uart_transport_t uart_transport;
@@ -344,6 +347,11 @@ static void hid_demo_test_task(void) {
 
 int main(void) {
     board_init();
+#if PICO_CLOCK_DEBUG_PRINT
+    // Print once, before pico_uart_transport_hw_init() below claims UART0
+    // for the binary protocol and reconfigures it away from stdio's baud.
+    pico_clock_debug_print();
+#endif
     pico_keyboard_capture_init(&keyboard_capture);
     pico_uart_transport_init(&uart_transport);
     pico_safety_release_init(&safety_release);

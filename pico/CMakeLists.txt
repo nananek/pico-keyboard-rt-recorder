@@ -19,6 +19,9 @@ option(PICO_HID_DEMO_TEST
 option(PICO_PLAYBACK_SCHED_TEST
        "Self-contained 1000-event/10ms playback scheduler benchmark driven without UART input, for Issue #7 acceptance testing"
        OFF)
+option(PICO_CLOCK_DEBUG_PRINT
+       "Print clk_sys/clk_peri/clk_ref/clk_usb once at boot over UART0-as-stdio, for Issue #26 clock-accuracy verification"
+       OFF)
 if(NOT TARGET tinyusb_pico_pio_usb)
     message(FATAL_ERROR
         "Pico-PIO-USB is unavailable. Initialize TinyUSB, then run "
@@ -27,6 +30,7 @@ endif()
 
 add_executable(pico_keyboard_hid
     src/main.c
+    src/clock_debug_test.c
     src/hid_boot_keyboard.c
     src/hid_keyboard_device.c
     src/hid_keyboard_host.c
@@ -56,6 +60,7 @@ target_link_libraries(pico_keyboard_hid PRIVATE
     hardware_uart
     hardware_irq
     hardware_timer
+    hardware_clocks
 )
 
 target_compile_definitions(pico_keyboard_hid PRIVATE
@@ -64,10 +69,18 @@ target_compile_definitions(pico_keyboard_hid PRIVATE
     PICO_DEFAULT_PIO_USB_DP_PIN=12
     PICO_HID_DEMO_TEST=$<BOOL:${PICO_HID_DEMO_TEST}>
     PICO_PLAYBACK_SCHED_TEST=$<BOOL:${PICO_PLAYBACK_SCHED_TEST}>
+    PICO_CLOCK_DEBUG_PRINT=$<BOOL:${PICO_CLOCK_DEBUG_PRINT}>
 )
 
 # USB is exclusively the TinyUSB HID device in this phase; do not add an SDK
-# stdio USB/CDC interface alongside it.
+# stdio USB/CDC interface alongside it. PICO_CLOCK_DEBUG_PRINT is the one
+# exception to "stdio UART off": that standalone diagnostic build reuses
+# UART0 as the SDK's stdio channel instead of the binary protocol, so it must
+# never be flashed onto a Zero-integrated setup.
 pico_enable_stdio_usb(pico_keyboard_hid 0)
-pico_enable_stdio_uart(pico_keyboard_hid 0)
+if(PICO_CLOCK_DEBUG_PRINT)
+    pico_enable_stdio_uart(pico_keyboard_hid 1)
+else()
+    pico_enable_stdio_uart(pico_keyboard_hid 0)
+endif()
 pico_add_extra_outputs(pico_keyboard_hid)
