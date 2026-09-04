@@ -27,7 +27,7 @@ void pico_uart_transport_hw_init(pico_uart_transport_t *transport) {
     active_transport = transport;
     gpio_set_function(PICO_KEYBOARD_UART_TX_GPIO, GPIO_FUNC_UART);
     gpio_set_function(PICO_KEYBOARD_UART_RX_GPIO, GPIO_FUNC_UART);
-    uart_init(uart0, 460800u);
+    uart_init(uart0, PICO_KEYBOARD_UART_BAUD);
     uart_set_format(uart0, 8u, 1u, UART_PARITY_NONE);
     uart_set_hw_flow(uart0, false, false);
     irq_set_exclusive_handler(UART0_IRQ, uart0_irq_handler);

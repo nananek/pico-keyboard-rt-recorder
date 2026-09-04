@@ -162,7 +162,14 @@ static void test_command_validation_and_overflow_faults(void) {
 
     pico_uart_transport_init(&transport);
     const uint8_t status[5] = {0u};
-    for (unsigned i = 0u; i < 85u; ++i) {
+    // The ring holds no more than this many whole encoded frames; the
+    // remainder (capacity modulo frame length) is never enough for one
+    // more. Computed rather than hardcoded so this stays correct as
+    // PICO_UART_TX_RING_CAPACITY is scaled with the configured baud.
+    const size_t frame_length = PICO_UART_PROTOCOL_HEADER_LEN +
+                                 sizeof(status) + PICO_UART_PROTOCOL_CRC_LEN;
+    const size_t frames_per_ring = PICO_UART_TX_RING_CAPACITY / frame_length;
+    for (size_t i = 0u; i < frames_per_ring; ++i) {
         CHECK(pico_uart_transport_queue_frame(
             &transport, PICO_UART_PICO_STATUS, status, sizeof(status)));
     }
@@ -174,7 +181,7 @@ static void test_command_validation_and_overflow_faults(void) {
     while (pico_uart_transport_pop_tx_byte(&transport, &tx_byte)) {
         ++tx_bytes;
     }
-    CHECK(tx_bytes == 1020u);
+    CHECK(tx_bytes == frames_per_ring * frame_length);
 
     pico_uart_transport_init(&transport);
     for (unsigned i = 0u; i < PICO_UART_RX_RING_CAPACITY + 1u; ++i) {
