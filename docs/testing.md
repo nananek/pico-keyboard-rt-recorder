@@ -40,7 +40,10 @@ same way the existing UART-fault and protocol-error entry points do. The
 main-output integration
 test verifies that PASS keeps its FIFO through a failed release, the
 release-sent iteration, and a normal HID-not-ready result; it also verifies
-that RECORD drains to UART while HID output is blocked. Only a validated
+RECORD's dual-sink dispatch: HID output retried through the same FIFO head
+exactly like PASS, and exactly one `RECORD_EVENT` per head sent the moment
+it is first peeked, unaffected by and never duplicated across that HID
+retry, including across a mode round-trip. Only a validated
 command can request a mode change. In particular, a repeated PASS command
 and a transport or malformed-frame fault received in PASS do not release a
 held key or clear accepted physical input.
@@ -83,8 +86,8 @@ to schedule an HID report; all reports carry future Pico-relative offsets.
 2. Flash the normal image and confirm native HID enumeration. In PASS, press and
    release a physical key and observe the same reports at the PC.
 3. Send a version-2 `MODE_SET(RECORD)` frame from the Zero. Confirm physical
-   reports stop reaching the PC and each report arrives as a CRC-valid
-   `RECORD_EVENT` with a nondecreasing Pico timestamp.
+   reports still reach the PC exactly as in PASS, AND each also arrives as a
+   CRC-valid `RECORD_EVENT` with a nondecreasing Pico timestamp.
 4. Send `MODE_SET(PASS)` and verify `MODE_CHANGED(PASS, OK)`, an all-zero HID
    release, and no replay of a stale key; the next host report is the first
    forwarded report.
@@ -162,6 +165,18 @@ to schedule an HID report; all reports carry future Pico-relative offsets.
     `docs/realtime-design.md`), while step 7 above already covers UART
     hardware/framing faults (including physical disconnection) independently
     of playback state.
+15. In RECORD (Issue #4 capture/pass-through latency diagnostics), hold the
+    native HID endpoint busy (e.g. block the PC-side driver) while sending
+    more physical key events than the 16-entry capture FIFO can hold; both
+    PC forwarding and `RECORD_EVENT` emission share this one FIFO, so an
+    overflow here means an event reaches neither sink. Confirm the events
+    that do fit still forward to the PC and record via `RECORD_EVENT` once
+    HID frees up, and that the device resumes normal PASS-equivalent
+    forwarding and recording for new key events afterward (no crash, no
+    stuck state). `pico_keyboard_capture_stats_t.dropped` is not currently
+    exposed over UART, so its accounting is instead exercised on the host by
+    `test_bounded_fifo_order_and_drop_accounting` in
+    `pico/tests/keyboard_capture_test.c`.
 
 UART event time is not used as a HID deadline; playback deadlines are the
 hardware-alarm-driven absolute `playback_start_us + offset_us` values
@@ -174,8 +189,8 @@ checked against the Pico hardware timer.
    (crossed TX/RX with common ground) and identify the serial device, normally
    `/dev/serial0`.
 2. Run `PYTHONPATH=zero python3 -m app --recordings-dir zero/recordings record hello --device /dev/serial0`.
-   Confirm Pico replies `MODE_CHANGED(RECORD, OK)` and physical keys no longer
-   reach the PC.
+   Confirm Pico replies `MODE_CHANGED(RECORD, OK)` and physical keys continue
+   reaching the PC (unlike before this issue).
 3. Press/release a normal key, a modifier, and simultaneous keys; then press
    Ctrl-C. Confirm `MODE_CHANGED(PASS, OK)`, the CLI JSON success result, and
    the all-release behaviour at the PC.

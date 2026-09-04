@@ -13,6 +13,10 @@ static unsigned pass_sends;
 static unsigned record_sends;
 static uint8_t last_pass_key;
 static uint64_t last_record_timestamp;
+// Snapshot of pass_sends taken inside send_record(), to verify RECORD_EVENT
+// is emitted before that iteration's HID attempt (not just before HID
+// success).
+static unsigned pass_sends_at_record_time;
 
 #define CHECK(condition)                                                        \
     do {                                                                        \
@@ -44,6 +48,7 @@ static void send_record(
     (void)user;
     ++record_sends;
     last_record_timestamp = event->timestamp_us;
+    pass_sends_at_record_time = pass_sends;
 }
 
 static void push_report(
@@ -99,19 +104,61 @@ int main(void) {
     CHECK(pass_sends == 2u && last_pass_key == 0x04u);
     CHECK(!pico_keyboard_capture_pop(&capture, &event));
 
-    // RECORD is independent of the release/HID state so its FIFO keeps moving
-    // while a failed release blocks PASS output.
+    // RECORD is a dual-sink dispatch (Issue #4): it forwards to the PC via
+    // HID exactly like PASS (retrying a busy endpoint against the same FIFO
+    // head), while also emitting exactly one RECORD_EVENT per head,
+    // regardless of how many times that head is retried against HID.
     CHECK(pico_mode_state_handle_mode_set(&mode, PICO_UART_MODE_RECORD));
+    pass_sends = 0u;
+    record_sends = 0u;
+
+    // Case 1: HID accepts immediately -- exactly one send on each sink, and
+    // the FIFO head is consumed.
     push_report(&capture, 20u, 0x05u);
-    push_report(&capture, 21u, 0x06u);
-    pico_safety_release_request(&release);
-    release_ready = false;
-    CHECK(pico_safety_release_service(&release, send_release, NULL) ==
-          PICO_SAFETY_RELEASE_BLOCKED);
+    pass_ready = true;
     pico_physical_report_dispatch(
-        &capture, &mode, false, send_pass, send_record, NULL);
-    CHECK(record_sends == 2u && last_record_timestamp == 21u);
+        &capture, &mode, true, send_pass, send_record, NULL);
+    CHECK(record_sends == 1u && pass_sends == 1u);
+    CHECK(last_record_timestamp == 20u && last_pass_key == 0x05u);
     CHECK(!pico_keyboard_capture_pop(&capture, &event));
+
+    // Case 2 + 3: HID stays busy across several dispatch calls. The head is
+    // retried against HID on every call (pass_sends keeps climbing) but the
+    // RECORD_EVENT for that same head is sent exactly once -- and, per the
+    // pass_sends_at_record_time snapshot taken inside send_record(), before
+    // that first iteration's HID attempt is even made, so recording is
+    // unaffected by the PC-side HID busy/retry state.
+    pass_sends = 0u;
+    record_sends = 0u;
+    push_report(&capture, 21u, 0x06u);
+    pass_ready = false;
+    pico_physical_report_dispatch(
+        &capture, &mode, true, send_pass, send_record, NULL);
+    CHECK(record_sends == 1u && pass_sends_at_record_time == 0u);
+    CHECK(pass_sends == 1u);
+    CHECK(pico_keyboard_capture_peek(&capture, &event) &&
+          event.report.keycode[0] == 0x06u);
+    pico_physical_report_dispatch(
+        &capture, &mode, true, send_pass, send_record, NULL);
+    pico_physical_report_dispatch(
+        &capture, &mode, true, send_pass, send_record, NULL);
+    CHECK(record_sends == 1u && pass_sends == 3u);
+    CHECK(pico_keyboard_capture_peek(&capture, &event));
+    pass_ready = true;
+    pico_physical_report_dispatch(
+        &capture, &mode, true, send_pass, send_record, NULL);
+    CHECK(record_sends == 1u && pass_sends == 4u);
+    CHECK(!pico_keyboard_capture_pop(&capture, &event));
+
+    // Case 4: head_recorded must not leak across a mode round-trip, so a
+    // fresh RECORD session's first event is still recorded (not silently
+    // skipped as if it were the previous session's already-recorded head).
+    CHECK(pico_mode_state_handle_mode_set(&mode, PICO_UART_MODE_PASS));
+    CHECK(pico_mode_state_handle_mode_set(&mode, PICO_UART_MODE_RECORD));
+    push_report(&capture, 22u, 0x07u);
+    pico_physical_report_dispatch(
+        &capture, &mode, true, send_pass, send_record, NULL);
+    CHECK(record_sends == 2u && last_record_timestamp == 22u);
 
     return failures == 0 ? 0 : 1;
 }

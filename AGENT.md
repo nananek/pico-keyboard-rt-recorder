@@ -30,9 +30,11 @@ feeds the queue, and controls the UI. The boundary is framed binary UART0
   or changes state.
 - The main loop validates version 2, length, CRC, direction, and payload before
   queueing commands. Invalid input cannot directly change state.
-- States are PASS, RECORD, ARMED, PLAYING, and ERROR. PASS forwards physical
-  reports; RECORD timestamps and sends `RECORD_EVENT` without forwarding;
-  ARMED/PLAYING/ERROR block physical reports.
+- States are PASS, RECORD, ARMED, PLAYING, and ERROR. PASS and RECORD both
+  forward physical reports to the PC via HID; RECORD additionally timestamps
+  each report and sends it to Zero as `RECORD_EVENT`, sent exactly once per
+  report regardless of HID busy/retry state. ARMED/PLAYING/ERROR block
+  physical reports.
 - Every successful state change, abort, and fault that enters ERROR clears stale
   physical input and sends an all-keys-release report. PASS waits for a fresh
   host report after release; an idempotent `MODE_SET(PASS)` leaves current input

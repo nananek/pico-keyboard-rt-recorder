@@ -102,10 +102,43 @@ static void test_bounded_fifo_order_and_drop_accounting(void) {
     CHECK(stats.dropped == 1u);
 }
 
+static void test_head_recorded_resets_on_pop_and_clear(void) {
+    pico_keyboard_capture_t capture;
+    const uint8_t report[PICO_HID_BOOT_KEYBOARD_REPORT_LEN] = {0u};
+    pico_keyboard_capture_event_t event;
+
+    pico_keyboard_capture_init(&capture);
+    CHECK(!pico_keyboard_capture_head_recorded(&capture));
+    pico_keyboard_capture_mark_head_recorded(&capture);
+    CHECK(!pico_keyboard_capture_head_recorded(&capture));
+
+    CHECK(pico_keyboard_capture_push(&capture, 1u, report, sizeof(report)));
+    CHECK(!pico_keyboard_capture_head_recorded(&capture));
+    pico_keyboard_capture_mark_head_recorded(&capture);
+    CHECK(pico_keyboard_capture_head_recorded(&capture));
+
+    // A second push behind the still-unpopped head must not disturb the
+    // head's recorded flag.
+    CHECK(pico_keyboard_capture_push(&capture, 2u, report, sizeof(report)));
+    CHECK(pico_keyboard_capture_head_recorded(&capture));
+
+    // Popping the recorded head advances the FIFO to the next (unrecorded)
+    // event, so the flag must clear even though the FIFO is not empty.
+    CHECK(pico_keyboard_capture_pop(&capture, &event));
+    CHECK(event.timestamp_us == 1u);
+    CHECK(!pico_keyboard_capture_head_recorded(&capture));
+
+    pico_keyboard_capture_mark_head_recorded(&capture);
+    CHECK(pico_keyboard_capture_head_recorded(&capture));
+    pico_keyboard_capture_clear(&capture);
+    CHECK(!pico_keyboard_capture_head_recorded(&capture));
+}
+
 int main(void) {
     test_preserves_report_and_timestamp();
     test_keeps_release_and_duplicate_reports();
     test_rejects_invalid_input_without_partial_event();
     test_bounded_fifo_order_and_drop_accounting();
+    test_head_recorded_resets_on_pop_and_clear();
     return failures == 0 ? 0 : 1;
 }

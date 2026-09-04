@@ -17,7 +17,7 @@ transitions. Mode is selected only through validated UART commands.
 ## Architecture
 
 ```text
-Physical keyboard -> Pico PIO-USB host -> (PASS) Pico USB HID -> PC
+Physical keyboard -> Pico PIO-USB host -> (PASS or RECORD) Pico USB HID -> PC
                                       -> (RECORD) UART0 -> Pi Zero
 Pi Zero -- UART0 MODE_SET/queue frames --> Pico main-loop state machine
 ```

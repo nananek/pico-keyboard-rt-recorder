@@ -72,7 +72,9 @@ of hanging forever.
 - PASS forwards each physical Boot Keyboard report to the PC and emits no
   `RECORD_EVENT`.
 - RECORD timestamps each valid 8-byte report at the Pico USB-host callback and
-  emits `RECORD_EVENT` to Zero without forwarding it to the PC.
+  emits `RECORD_EVENT` to Zero, sent exactly once per report and unaffected
+  by PC-side HID busy/retry state, and also forwards it to the PC exactly as
+  PASS does, retrying against a busy HID endpoint.
 - ARMED and PLAYING block physical reports. PLAY_START is valid only in ARMED;
   it samples a Pico epoch, arms the absolute-deadline playback scheduler
   against it, and enters PLAYING. An empty queue finishes only after
