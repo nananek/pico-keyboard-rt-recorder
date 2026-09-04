@@ -197,6 +197,25 @@ class ServiceAndCliTests(unittest.TestCase):
             self.assertEqual(RecordingStore(directory).load("hello"), recording)
         self.assertEqual(len(stream.writes), 2)
 
+    def test_progress_reports_live_event_count_and_stays_after_stop(self):
+        stream = FakeStream(
+            [
+                mode_changed(MODE_RECORD),
+                record_event(100, (0,) * 8) + record_event(140, (1,) * 8),
+                mode_changed(MODE_PASS),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            session = RecordingSession(PicoTransport(stream), RecordingStore(directory), "hello")
+            session.start()
+            self.assertEqual(session.progress(), {"recording": {"event_count": 0}})
+            session.receive_and_consume(timeout=0.1)
+            self.assertEqual(session.progress(), {"recording": {"event_count": 1}})
+            session.receive_and_consume(timeout=0.1)
+            self.assertEqual(session.progress(), {"recording": {"event_count": 2}})
+            session.stop()
+            self.assertEqual(session.progress(), {"recording": {"event_count": 2}})
+
     def test_stop_persists_reports_queued_before_pass_ack(self):
         stream = FakeStream(
             [

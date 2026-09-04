@@ -262,6 +262,46 @@ class PlaybackTests(unittest.TestCase):
             [stream.actions[index : index + 4] for index in range(len(stream.actions) - 3)],
         )
 
+    def test_progress_tracks_buffer_playback_counters_and_clamped_elapsed_estimate(self):
+        class ManualClock:
+            def __init__(self):
+                self.now = 0.0
+
+            def __call__(self):
+                return self.now
+
+        clock = ManualClock()
+        stream = PlaybackPicoStream(capacity=8)
+        session = PlaybackSession(
+            PicoTransport(stream, clock=clock),
+            recording_from_deltas([0, 250_000, 250_000, 100_000, 100_000, 100_000, 100_000]),
+        )
+
+        before_start = session.progress()
+        self.assertEqual(before_start["playback"]["queued_events"], 0)
+        self.assertEqual(before_start["playback"]["total_events"], 7)
+        self.assertEqual(before_start["playback"]["duration_us"], 900_000)
+        self.assertEqual(before_start["playback"]["elapsed_us_estimate"], 0)
+        self.assertEqual(before_start["playback"]["underrun_count"], 0)
+
+        session.start()
+        after_start = session.progress()
+        self.assertGreater(after_start["playback"]["queued_events"], 0)
+        self.assertEqual(after_start["buffer"]["queued_count"], stream.queue_count)
+
+        # Wall-clock elapsed estimate is a diagnostic-only approximation: it
+        # must clamp to the (speed-scaled) duration rather than overshoot it.
+        # (Stay under the session's own playback_timeout deadline, which is
+        # derived from the same clock.)
+        clock.now = 1.0
+        overshoot = session.progress()
+        self.assertEqual(overshoot["playback"]["elapsed_us_estimate"], 900_000)
+
+        session.finish()
+        after_finish = session.progress()
+        self.assertEqual(after_finish["playback"]["queued_events"], 7)
+        self.assertEqual(after_finish["playback"]["total_events"], 7)
+
     def test_recording_shorter_than_prebuffer_closes_before_play_start(self):
         stream = PlaybackPicoStream(capacity=4)
         result = PlaybackSession(
