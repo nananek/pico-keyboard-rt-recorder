@@ -298,7 +298,11 @@ class Controller:
                 raise RecorderError(f"no {kind} session is active")
             stop_event = self._stop_event
             worker = self._worker
-        assert stop_event is not None and worker is not None
+        if stop_event is None or worker is None:
+            # _begin() has claimed active_kind but the session's synchronous
+            # mode handshake (between _begin() and the worker thread being
+            # created) hasn't finished yet: there is nothing to signal.
+            raise RecorderError(f"{kind} session is still starting; try again")
         stop_event.set()
         worker.join(timeout=timeout)
         if worker.is_alive():

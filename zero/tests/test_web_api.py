@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 from app import web
+from app.controller import Controller
+from app.errors import RecorderError
 from app.recording import Recording, RecordingBuilder, RecordingStore
 from app.transport import PicoTransport
 from app.uart_protocol import (
@@ -319,6 +321,47 @@ class WebApiTests(unittest.TestCase):
 
             status = client.get("/api/status").json()
             self.assertEqual(status["state"], "PASS")
+
+
+class ControllerConcurrencyTests(unittest.TestCase):
+    def test_stop_during_start_handshake_is_a_clean_conflict_not_a_crash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stream = LiveStream()
+            transport = PicoTransport(stream)
+            controller = Controller(transport, RecordingStore(directory), record_poll_interval=0.02)
+
+            result = {}
+
+            def do_start():
+                result["response"] = controller.start_recording("hello")
+
+            start_thread = threading.Thread(target=do_start)
+            start_thread.start()
+            # start_recording's mode handshake blocks here waiting for
+            # MODE_CHANGED(RECORD): active_kind is already "record" but the
+            # worker thread and stop_event don't exist yet.
+            self.assertTrue(wait_until(lambda: len(stream.writes) >= 1))  # MODE_SET(RECORD)
+
+            with self.assertRaisesRegex(RecorderError, "still starting"):
+                controller.stop_recording(timeout=1.0)
+
+            stream.push(mode_changed(MODE_RECORD))
+            start_thread.join(timeout=5.0)
+            self.assertFalse(start_thread.is_alive())
+            self.assertEqual(result["response"]["state"], "RECORD")
+
+            # Clean up the now-running recording.
+            stop_result = {}
+
+            def do_stop():
+                stop_result["response"] = controller.stop_recording(timeout=5.0)
+
+            stop_thread = threading.Thread(target=do_stop)
+            stop_thread.start()
+            self.assertTrue(wait_until(lambda: len(stream.writes) >= 2))  # MODE_SET(PASS)
+            stream.push(mode_changed(MODE_PASS))
+            stop_thread.join(timeout=5.0)
+            self.assertFalse(stop_thread.is_alive())
 
 
 if __name__ == "__main__":
