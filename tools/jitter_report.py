@@ -7,6 +7,12 @@ line a JSON object with a `metrics` field shaped like the Pico's
 across-run min/max/mean for the fields that matter for real-time
 acceptance: p95/p99/max lateness, underrun count, and dispatched count.
 
+Also flags any run with `samples_truncated=true` (its p95/p99 come from only
+the first PICO_PLAYBACK_SCHEDULER_MAX_SAMPLES=2048 dispatches, per
+`pico/src/playback_scheduler.c`, and so may not reflect drift/contention
+that shows up later in a longer run) instead of silently folding it into the
+aggregate alongside untruncated runs.
+
 Standard library only -- no new dependency on top of zero/requirements.txt.
 """
 
@@ -67,6 +73,20 @@ def _stats(values: Sequence[float]) -> dict[str, float]:
     }
 
 
+def truncated_runs(runs: Sequence[Run]) -> list[Run]:
+    """Runs whose `samples_truncated` flag is set.
+
+    A truncated run's `lateness_samples` log (`pico/src/playback_scheduler.c`,
+    PICO_PLAYBACK_SCHEDULER_MAX_SAMPLES = 2048) only covers the first ~2048
+    dispatches, so its p95_lateness_us/p99_lateness_us reflect that prefix
+    rather than the whole run -- a longer run's later-run drift/contention/
+    thermal degradation would not show up there. Surfacing which runs hit
+    this (rather than silently folding them into the aggregate alongside
+    untruncated runs) is the point of this function.
+    """
+    return [run for run in runs if run.metrics.get("samples_truncated")]
+
+
 def aggregate(runs: Sequence[Run]) -> dict[str, dict[str, float]]:
     """Across-run min/max/mean for each field in FIELDS."""
     if not runs:
@@ -81,22 +101,35 @@ def format_text(runs: Sequence[Run], summary: dict[str, dict[str, float]]) -> st
     lines = [f"{len(runs)} run(s):"]
     for run in runs:
         values = ", ".join(f"{field}={run.metrics.get(field, 0)}" for field in FIELDS)
-        lines.append(f"  {run.source}:{run.line_number}  {values}")
+        marker = " [samples_truncated]" if run.metrics.get("samples_truncated") else ""
+        lines.append(f"  {run.source}:{run.line_number}  {values}{marker}")
     lines.append("")
     lines.append("across-run summary (min / mean / max):")
     for field in FIELDS:
         stat = summary[field]
         lines.append(f"  {field:>18}: {stat['min']:g} / {stat['mean']:g} / {stat['max']:g}")
+    truncated = truncated_runs(runs)
+    if truncated:
+        lines.append("")
+        lines.append(
+            f"caution: {len(truncated)}/{len(runs)} run(s) have samples_truncated=true "
+            "-- their p95/p99 above reflect only the first "
+            "PICO_PLAYBACK_SCHEDULER_MAX_SAMPLES (2048) dispatches, not the whole run:"
+        )
+        for run in truncated:
+            lines.append(f"  {run.source}:{run.line_number}")
     return "\n".join(lines)
 
 
 def format_csv(runs: Sequence[Run]) -> str:
-    header = ["source", "line"] + list(FIELDS)
+    header = ["source", "line"] + list(FIELDS) + ["samples_truncated"]
     rows = [",".join(header)]
     for run in runs:
-        row = [run.source, str(run.line_number)] + [
-            str(run.metrics.get(field, 0)) for field in FIELDS
-        ]
+        row = (
+            [run.source, str(run.line_number)]
+            + [str(run.metrics.get(field, 0)) for field in FIELDS]
+            + [str(bool(run.metrics.get("samples_truncated", False))).lower()]
+        )
         rows.append(",".join(row))
     return "\n".join(rows)
 

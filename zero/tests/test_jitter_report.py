@@ -11,7 +11,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tools.jitter_report import aggregate, format_csv, format_text, load_runs
+from tools.jitter_report import aggregate, format_csv, format_text, load_runs, truncated_runs
 
 
 def _write_jsonl(directory: Path, name: str, entries: list[dict]) -> Path:
@@ -30,6 +30,7 @@ def metrics(**overrides) -> dict:
         "max_lateness_us": 200,
         "p95_lateness_us": 150,
         "p99_lateness_us": 190,
+        "samples_truncated": False,
     }
     base.update(overrides)
     return base
@@ -110,6 +111,49 @@ class JitterReportTests(unittest.TestCase):
         csv_text = format_csv(runs)
         self.assertEqual(len(csv_text.splitlines()), 3)  # header + 2 runs
         self.assertIn("dispatched_count", csv_text.splitlines()[0])
+
+    def test_truncated_runs_are_flagged_not_silently_aggregated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = _write_jsonl(
+                Path(directory),
+                "a.jsonl",
+                [
+                    {"metrics": metrics(p99_lateness_us=190, samples_truncated=False)},
+                    {"metrics": metrics(p99_lateness_us=99999, samples_truncated=True)},
+                ],
+            )
+            runs = load_runs([path])
+            summary = aggregate(runs)
+
+        # aggregate() still folds every run's numbers together (it has no
+        # opinion on truncation); the point of truncated_runs()/format_text()
+        # below is to flag which of those numbers to distrust, not to change
+        # the arithmetic.
+        self.assertEqual(summary["p99_lateness_us"]["max"], 99999)
+
+        flagged = truncated_runs(runs)
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].metrics["p99_lateness_us"], 99999)
+
+        text = format_text(runs, summary)
+        self.assertIn("[samples_truncated]", text)
+        self.assertIn("caution: 1/2 run(s) have samples_truncated=true", text)
+
+        csv_text = format_csv(runs)
+        header, first_row, second_row = csv_text.splitlines()
+        self.assertEqual(header.split(",")[-1], "samples_truncated")
+        self.assertEqual(first_row.split(",")[-1], "false")
+        self.assertEqual(second_row.split(",")[-1], "true")
+
+    def test_format_text_omits_caution_when_no_run_is_truncated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = _write_jsonl(Path(directory), "a.jsonl", [{"metrics": metrics()}])
+            runs = load_runs([path])
+            summary = aggregate(runs)
+
+        text = format_text(runs, summary)
+        self.assertNotIn("caution", text)
+        self.assertNotIn("[samples_truncated]", text)
 
 
 if __name__ == "__main__":
