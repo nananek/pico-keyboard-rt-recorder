@@ -52,11 +52,15 @@ held key or clear accepted physical input.
 the normal and HID-demo Pico SDK builds with TinyUSB's pinned Pico-PIO-USB
 dependency.
 
-The Zero recorder host checks require only Python's standard-library unittest
-runner (PySerial is needed only when opening a real serial device):
+Most Zero recorder host checks require only Python's standard-library
+unittest runner (PySerial is needed only when opening a real serial device);
+`test_web_api.py` additionally needs `fastapi`/`uvicorn` from
+`zero/requirements.txt` importable, since it drives the web API through
+FastAPI's `TestClient`:
 
 ```sh
 cd zero
+python3 -m pip install -r requirements.txt
 python3 -m unittest discover -s tests -v
 ```
 
@@ -77,6 +81,22 @@ pipeline writes, asynchronous credit renewal, underrun credit/diagnostics,
 explicit PLAY_ABORT outcome/metrics consumption, and rejection when 500 ms of
 events cannot fit the advertised Pico capacity. No test advances a Linux timer
 to schedule an HID report; all reports carry future Pico-relative offsets.
+
+`RecordingStore.rename`/`delete` tests cover renaming rewriting the recording's
+embedded name and rejecting a missing source, a collision, or a path-traversal
+name without moving or removing anything, and deleting rejecting a missing
+name.
+
+Web API tests drive `app.web`'s FastAPI app through `TestClient` against a
+fake Pico byte stream, covering: status/list/download and their 404/400/409
+error-code mapping; a full record start/stop lifecycle whose persisted
+`dt_us` deltas match what was received; a second recording or playback while
+one is active being rejected with 409; a rejected `MODE_SET` recovering to
+PASS; rename/delete refusing the currently-active recording; a normal
+playback completing and returning to PASS; and playback `stop` aborting
+mid-stream (before `PLAY_FINISHED` arrives) and still returning to PASS. The
+FastAPI lifespan's startup/shutdown `Controller.safe_stop()` reconciliation is
+exercised by every test implicitly, since each one opens and closes an app.
 
 ## Hardware acceptance
 
@@ -211,3 +231,39 @@ checked against the Pico hardware timer.
 7. Interrupt a long `play` command with Ctrl-C. Confirm `PLAY_ABORTED`, then
    `PLAY_METRICS`, then `MODE_CHANGED(ARMED, ABORTED)` are consumed in order,
    followed by a successful transition to PASS before the serial port closes.
+
+## Zero web API acceptance
+
+1. Install `zero/systemd/pico-keyboard-recorder.service` (adjust
+   `WorkingDirectory`/`User` for the target host), `systemctl enable --now`
+   it, and confirm `GET /api/status` reports `"state": "PASS"` -- this also
+   exercises startup reconciliation (a CRC-checked `MODE_SET(PASS)`, not
+   GPIO) when the Pico is freshly booted and already in PASS.
+2. Manually put the Pico in a non-PASS state (e.g. `zero-recorder stop` after
+   first sending `MODE_SET(RECORD)` out of band, or restart the service while
+   a prior run left it ARMED), then start/restart the service. Confirm status
+   settles on PASS without needing a client request.
+3. `POST /api/recordings/<name>/record`, confirm status reports `"state":
+   "RECORD"`, press/release physical keys, then `POST /api/record/stop` and
+   confirm the response's recording JSON matches a `GET
+   .../download` of the same name, and that `MODE_CHANGED(PASS, OK)` was
+   observed on the wire.
+4. While that recording is active, `POST` a second `record` or `play` request
+   and confirm 409 rather than a second Pico session. Confirm `POST
+   /api/recordings/<name>/rename` and `DELETE /api/recordings/<name>` both
+   reject the currently-active recording with a non-2xx status.
+5. `POST /api/recordings/<name>/play`, confirm `"state": "PLAYING"`, then
+   `POST /api/playback/stop` mid-playback. Confirm an all-keys-release
+   report at the PC, `PLAY_ABORTED`/`PLAY_METRICS`/`MODE_CHANGED(ARMED,
+   ABORTED)` on the wire in order, and status returning to PASS.
+6. Let a playback run to completion untouched; confirm `PLAY_FINISHED`/
+   `PLAY_METRICS`/`MODE_CHANGED(ARMED, FINISHED)` and a return to PASS,
+   matching hardware-acceptance step 9 above but driven over HTTP.
+7. `POST /api/recordings/<name>/rename` and `DELETE /api/recordings/<name>`
+   on an inactive recording; confirm `GET /api/recordings` reflects the
+   change and a repeat `DELETE` returns 404.
+8. While a recording or playback is active, `systemctl stop
+   pico-keyboard-recorder` (or send SIGTERM directly). Confirm the all-release
+   report and a final `MODE_CHANGED(PASS, OK)` are observed before the
+   process exits, and that `systemctl restart` afterward again settles on
+   PASS per step 1/2.

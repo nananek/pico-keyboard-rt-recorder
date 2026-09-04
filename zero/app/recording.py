@@ -175,6 +175,27 @@ class RecordingStore:
         except RecordingValidationError as error:
             raise StorageError(f"invalid recording file {path.name}: {error}") from error
 
+    def rename(self, old: str, new: str) -> Path:
+        validate_name(new)
+        if old == new:
+            raise StorageError("recording new name must differ from the current name")
+        # A recording's own `name` field must match its filename (see
+        # parse_recording), so renaming rewrites the file rather than just
+        # relinking it -- reusing save()'s atomic, no-clobber publication.
+        recording = self.load(old)
+        self.save(Recording(new, recording.duration_us, recording.events))
+        self.delete(old)
+        return self.path_for(new)
+
+    def delete(self, name: str) -> None:
+        path = self.path_for(name)
+        try:
+            path.unlink()
+        except FileNotFoundError as error:
+            raise StorageError(f"recording not found: {name}") from error
+        except OSError as error:
+            raise StorageError(f"could not delete recording {name}: {error}") from error
+
     def list_metadata(self) -> list[dict[str, object]]:
         try:
             paths = sorted(self.directory.glob("*.json"), key=lambda candidate: candidate.name)

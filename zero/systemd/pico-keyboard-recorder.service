@@ -1,0 +1,32 @@
+[Unit]
+Description=Pico Keyboard Real-time Recorder web API
+After=network.target dev-serial0.device
+Wants=dev-serial0.device
+
+[Service]
+Type=simple
+# Adjust to wherever this repository is checked out on the Zero.
+WorkingDirectory=/opt/pico-keyboard-rt-recorder/zero
+ExecStart=/usr/bin/python3 -m uvicorn app.web:app --host 0.0.0.0 --port 8000
+Environment=ZERO_SERIAL_DEVICE=/dev/serial0
+Environment=ZERO_SERIAL_BAUD=460800
+
+# uvicorn forwards SIGTERM into FastAPI's lifespan shutdown, which runs
+# Controller.safe_stop() to abort any active session and reconcile the Pico
+# to PASS before the process exits; give that its own bounded window on top
+# of Controller's own ~10s stop timeout.
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=2
+
+# Needs access to the UART device; run as a low-privilege user in the
+# group that owns /dev/serial0 (commonly "dialout" or "gpio" on Raspberry Pi OS).
+User=pico-recorder
+Group=dialout
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/pico-keyboard-rt-recorder/zero/recordings
+
+[Install]
+WantedBy=multi-user.target

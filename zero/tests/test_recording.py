@@ -88,6 +88,51 @@ class RecordingTests(unittest.TestCase):
             self.assertEqual(store.load("hello"), winning_recording)
             self.assertEqual(list(Path(directory).glob("*.tmp")), [])
 
+    def test_rename_moves_a_recording_and_rejects_a_missing_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecordingStore(directory)
+            builder = RecordingBuilder("old-name")
+            builder.add(1, (0,) * 8)
+            store.save(builder.build())
+
+            new_path = store.rename("old-name", "new-name")
+
+            self.assertFalse(store.exists("old-name"))
+            self.assertTrue(store.exists("new-name"))
+            self.assertEqual(store.load("new-name").name, "new-name")
+            self.assertEqual(new_path, store.path_for("new-name"))
+            with self.assertRaisesRegex(StorageError, "not found"):
+                store.rename("old-name", "another-name")
+
+    def test_rename_rejects_path_traversal_and_does_not_clobber_an_existing_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecordingStore(directory)
+            for name in ("hello", "world"):
+                builder = RecordingBuilder(name)
+                builder.add(1, (0,) * 8)
+                store.save(builder.build())
+
+            with self.assertRaises(RecordingValidationError):
+                store.rename("hello", "../escape")
+            with self.assertRaisesRegex(StorageError, "already exists"):
+                store.rename("hello", "world")
+            # Neither failure should have moved or removed anything.
+            self.assertTrue(store.exists("hello"))
+            self.assertTrue(store.exists("world"))
+
+    def test_delete_removes_a_recording_and_rejects_a_missing_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecordingStore(directory)
+            builder = RecordingBuilder("hello")
+            builder.add(1, (0,) * 8)
+            store.save(builder.build())
+
+            store.delete("hello")
+
+            self.assertFalse(store.exists("hello"))
+            with self.assertRaisesRegex(StorageError, "not found"):
+                store.delete("hello")
+
     def test_invalid_file_is_an_identifiable_error(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "hello.json"
