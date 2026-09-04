@@ -1,13 +1,17 @@
 import contextlib
 import io
+from pathlib import Path
 import struct
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from app import cli
 from app.errors import ModeRejected, PicoError, ProtocolError, RecorderError, TransportTimeout
-from app.recording import RecordingStore
+from app.recording import Recording, RecordingEvent, RecordingStore
 from app.service import RecordingSession
 from app.transport import PicoTransport
 from app.uart_protocol import (
@@ -21,6 +25,10 @@ from app.uart_protocol import (
     MODE_RECORD,
     PICO_STATUS,
     PLAY_READY,
+    PLAY_FINISHED,
+    PLAY_METRICS,
+    PLAY_START,
+    PLAY_STARTED,
     QUEUE_CLEAR,
     QUEUE_END,
     QUEUE_EVENT,
@@ -297,6 +305,76 @@ class ServiceAndCliTests(unittest.TestCase):
         self.assertEqual(status, 3)
         open_transport.assert_not_called()
         self.assertIn('"ok":false', stderr.getvalue())
+
+    def test_cli_play_emits_metrics_json_and_returns_to_pass(self):
+        metrics = struct.pack("<IIiiqiiB", 1, 0, 0, 0, 0, 0, 0, 0)
+        stream = FakeStream(
+            [
+                mode_changed(MODE_ARMED),
+                buffer_status(MODE_ARMED, 0, 512),
+                buffer_status(MODE_ARMED, 1, 511),
+                pico_frame(PLAY_READY),
+                buffer_status(MODE_ARMED, 1, 511),
+                mode_changed(3)
+                + pico_frame(PLAY_STARTED, struct.pack("<Q", 1234))
+                + pico_frame(PLAY_FINISHED)
+                + pico_frame(PLAY_METRICS, metrics)
+                + mode_changed(MODE_ARMED, 7),
+                mode_changed(MODE_PASS),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            RecordingStore(directory).save(
+                Recording("hello", 0, (RecordingEvent(0, (0,) * 8),))
+            )
+            with patch(
+                "app.cli._open_transport",
+                return_value=(PicoTransport(stream), stream),
+            ):
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    status = cli.main(
+                        [
+                            "--recordings-dir",
+                            directory,
+                            "play",
+                            "hello",
+                            "--device",
+                            "fake",
+                        ]
+                    )
+        self.assertEqual(status, 0)
+        self.assertIn('"outcome":"finished"', stdout.getvalue())
+        self.assertIn(PLAY_START, [write[2] for write in stream.writes])
+        self.assertTrue(stream.closed)
+
+    def test_cli_play_closes_serial_when_options_are_invalid(self):
+        stream = FakeStream([])
+        with tempfile.TemporaryDirectory() as directory:
+            RecordingStore(directory).save(
+                Recording("hello", 0, (RecordingEvent(0, (0,) * 8),))
+            )
+            with patch(
+                "app.cli._open_transport",
+                return_value=(PicoTransport(stream), stream),
+            ):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    status = cli.main(
+                        [
+                            "--recordings-dir",
+                            directory,
+                            "play",
+                            "hello",
+                            "--device",
+                            "fake",
+                            "--prebuffer-ms",
+                            "100",
+                        ]
+                    )
+        self.assertEqual(status, 3)
+        self.assertIn("at least 500 ms", stderr.getvalue())
+        self.assertTrue(stream.closed)
 
 
 if __name__ == "__main__":

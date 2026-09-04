@@ -29,6 +29,7 @@ static pico_mode_state_t mode_state;
 static pico_safety_release_t safety_release;
 static pico_playback_queue_t playback_queue;
 static pico_playback_scheduler_t playback_scheduler;
+static bool playback_flow_control_fault;
 
 static void mode_all_release(void *user) {
     (void)user;
@@ -74,6 +75,8 @@ static void mode_clear_queue(void *user) {
     // currently running, e.g. PASS/RECORD/ARMED-from-PASS entry).
     pico_playback_scheduler_stop(&playback_scheduler);
     pico_playback_queue_clear(&playback_queue);
+    pico_playback_scheduler_reset_sequence(&playback_scheduler);
+    playback_flow_control_fault = false;
 }
 
 static void mode_changed(void *user, uint8_t state, uint8_t reason) {
@@ -172,18 +175,44 @@ static bool send_buffer_status(void) {
         &uart_transport, PICO_UART_BUFFER_STATUS, payload, sizeof(payload));
 }
 
-/* QUEUE_CLEAR/QUEUE_EVENT/QUEUE_END load the fixed-capacity playback queue.
- * They are accepted only in ARMED, matching where PLAY_START is accepted; any
- * other state is a protocol error, consistent with how this dispatcher
- * already treats unexpected commands. */
+static void playback_underrun(
+    void *user,
+    uint64_t elapsed_offset_us,
+    uint16_t free_capacity) {
+    pico_uart_transport_t *transport = (pico_uart_transport_t *)user;
+    uint8_t payload[10];
+    write_u64_le(payload, elapsed_offset_us);
+    payload[8] = (uint8_t)(free_capacity & 0xFFu);
+    payload[9] = (uint8_t)(free_capacity >> 8);
+    if (!pico_uart_transport_queue_frame(
+            transport, PICO_UART_PLAY_UNDERRUN, payload, sizeof(payload))) {
+        playback_flow_control_fault = true;
+    }
+}
+
+static void playback_buffer_available(void *user) {
+    (void)user;
+    if (!send_buffer_status()) {
+        // Avoid re-entering the mode state machine from inside scheduler
+        // task(); the main loop converts the failed flow-control grant into
+        // a protocol error immediately after task() returns.
+        playback_flow_control_fault = true;
+    }
+}
+
+/* QUEUE_CLEAR starts a new sequence in ARMED. QUEUE_EVENT and QUEUE_END can
+ * continue/close that sequence while PLAYING so Zero can stream beyond the
+ * fixed queue capacity. */
 static void dispatch_queue_command(const pico_uart_frame_t *frame) {
-    if (pico_mode_state_get(&mode_state) != PICO_UART_MODE_ARMED) {
+    const uint8_t state = pico_mode_state_get(&mode_state);
+    if (!pico_uart_queue_command_allowed(frame->type, state)) {
         pico_mode_state_protocol_error(&mode_state);
         return;
     }
     switch (frame->type) {
         case PICO_UART_QUEUE_CLEAR:
             pico_playback_queue_clear(&playback_queue);
+            pico_playback_scheduler_reset_sequence(&playback_scheduler);
             if (!send_buffer_status()) {
                 /* The TX ring is saturated: Zero will never see this ack.
                  * Enter ERROR rather than leave Zero waiting on a reply that
@@ -216,8 +245,11 @@ static void dispatch_queue_command(const pico_uart_frame_t *frame) {
             break;
         }
         case PICO_UART_QUEUE_END:
-            (void)pico_uart_transport_queue_frame(
-                &uart_transport, PICO_UART_PLAY_READY, NULL, 0u);
+            pico_playback_scheduler_mark_sequence_ended(&playback_scheduler);
+            if (state == PICO_UART_MODE_ARMED) {
+                (void)pico_uart_transport_queue_frame(
+                    &uart_transport, PICO_UART_PLAY_READY, NULL, 0u);
+            }
             if (!send_buffer_status()) {
                 pico_mode_state_protocol_error(&mode_state);
             }
@@ -327,6 +359,8 @@ int main(void) {
     const pico_playback_scheduler_callbacks_t scheduler_callbacks = {
         .send_report = send_pass_report,
         .on_complete = playback_complete,
+        .on_underrun = playback_underrun,
+        .on_buffer_available = playback_buffer_available,
         .user = &uart_transport,
     };
     pico_playback_scheduler_init(&playback_scheduler, &playback_queue, &scheduler_callbacks);
@@ -370,6 +404,10 @@ int main(void) {
             release_result == PICO_SAFETY_RELEASE_READY, send_pass_report,
             send_record_event, NULL);
         pico_playback_scheduler_task(&playback_scheduler);
+        if (playback_flow_control_fault) {
+            playback_flow_control_fault = false;
+            pico_mode_state_protocol_error(&mode_state);
+        }
         pico_uart_transport_tx_task(&uart_transport);
 #if PICO_HID_DEMO_TEST
         if (release_result == PICO_SAFETY_RELEASE_READY) {

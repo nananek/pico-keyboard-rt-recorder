@@ -18,6 +18,8 @@ from .uart_protocol import (
     Frame,
     IncrementalDecoder,
     encode_frame,
+    encode_play_abort,
+    encode_play_start,
     encode_queue_clear,
     encode_queue_end,
     encode_queue_event,
@@ -96,6 +98,29 @@ class PicoTransport:
         self._await(PLAY_READY, timeout=remaining())
         validate_buffer_status(self._await(BUFFER_STATUS, timeout=remaining()))
 
+    def send_queue_clear(self) -> None:
+        self._write(encode_queue_clear())
+
+    def send_queue_event(self, offset_us: int, report: bytes) -> None:
+        self._write(encode_queue_event(offset_us, report))
+
+    def send_queue_end(self) -> None:
+        self._write(encode_queue_end())
+
+    def send_play_start(self) -> None:
+        self._write(encode_play_start())
+
+    def send_play_abort(self) -> None:
+        self._write(encode_play_abort())
+
+    def await_frame(self, message_type: int, *, timeout: float) -> Frame:
+        """Wait for one message type while preserving interleaved frames."""
+        return self._await(message_type, timeout=timeout)
+
+    def preserve_frames(self, frames: Iterable[Frame]) -> None:
+        """Put already-consumed frames back at the front in wire order."""
+        self._pending.extendleft(reversed(tuple(frames)))
+
     def _await(self, message_type: int, *, timeout: float) -> Frame:
         """Wait for a specific message type, deferring any other frames.
 
@@ -161,7 +186,7 @@ class PicoTransport:
     @staticmethod
     def require_not_error(frame: Frame) -> Frame:
         if frame.message_type == ERROR:
-            raise PicoError("Pico reported ERROR during recording")
+            raise PicoError("Pico reported ERROR")
         if frame.message_type == PICO_STATUS:
             state, faults = validate_pico_status(frame)
             if state == MODE_ERROR or any(faults):

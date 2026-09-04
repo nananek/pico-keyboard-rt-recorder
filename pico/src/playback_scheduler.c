@@ -77,12 +77,7 @@ static void finish(pico_playback_scheduler_t *scheduler, uint8_t reason) {
     sort_samples(scheduler->lateness_samples, scheduler->sample_count);
     const pico_playback_scheduler_metrics_t metrics = {
         .dispatched_count = scheduler->dispatched_count,
-        // Underruns are out of scope for Issue #7: under the current
-        // QUEUE_END -> PLAY_READY -> PLAY_START contract the queue is always
-        // a complete sequence by the time PLAY_START runs, so an empty queue
-        // is always normal completion. This field is reserved for the
-        // future Zero streaming feeder (Issue #9).
-        .underrun_count = 0u,
+        .underrun_count = scheduler->underrun_count,
         .min_lateness_us = scheduler->min_lateness_us,
         .max_lateness_us = scheduler->max_lateness_us,
         .sum_lateness_us = scheduler->sum_lateness_us,
@@ -97,11 +92,30 @@ static void finish(pico_playback_scheduler_t *scheduler, uint8_t reason) {
     }
 }
 
+static void begin_underrun(pico_playback_scheduler_t *scheduler) {
+    scheduler->waiting_for_event = true;
+    if (scheduler->underrun_active) {
+        return;
+    }
+    scheduler->underrun_active = true;
+    ++scheduler->underrun_count;
+    const uint64_t now_us = time_us_64();
+    const uint64_t elapsed_offset_us = now_us >= scheduler->playback_start_us
+        ? now_us - scheduler->playback_start_us
+        : 0u;
+    if (scheduler->callbacks.on_underrun != NULL) {
+        scheduler->callbacks.on_underrun(
+            scheduler->callbacks.user,
+            elapsed_offset_us,
+            (uint16_t)pico_playback_queue_free_capacity(scheduler->queue));
+    }
+}
+
 // Peeks the new queue head and either arms a hardware alarm for its deadline
 // (still in the future) or leaves the alarm unarmed so task()'s time_us_64()
 // polling check picks it up on the very next call (already due). Returns
-// false when the queue is empty, having already called finish() with
-// PICO_UART_REASON_FINISHED in that case.
+// false when the queue is empty, either finishing an ended sequence or
+// entering an underrun wait for an open streaming sequence.
 static bool arm_next(pico_playback_scheduler_t *scheduler) {
     // task() can dispatch the current head event because time_us_64()
     // polling already caught up to its deadline, before that event's own
@@ -118,9 +132,15 @@ static bool arm_next(pico_playback_scheduler_t *scheduler) {
     }
     pico_playback_queue_event_t event;
     if (!pico_playback_queue_peek(scheduler->queue, &event)) {
-        finish(scheduler, PICO_UART_REASON_FINISHED);
+        if (scheduler->sequence_ended) {
+            finish(scheduler, PICO_UART_REASON_FINISHED);
+        } else {
+            begin_underrun(scheduler);
+        }
         return false;
     }
+    scheduler->waiting_for_event = false;
+    scheduler->underrun_active = false;
     scheduler->next_deadline_us = scheduler->playback_start_us + event.offset_us;
     if (time_us_64() < scheduler->next_deadline_us) {
         const alarm_id_t id = add_alarm_at(
@@ -159,17 +179,37 @@ void pico_playback_scheduler_start(
         return;
     }
     scheduler->running = true;
+    scheduler->waiting_for_event = false;
+    scheduler->underrun_active = false;
     scheduler->playback_start_us = playback_start_us;
     scheduler->next_deadline_us = playback_start_us;
     scheduler->alarm_armed = false;
     atomic_store_explicit(&scheduler->alarm_fired, false, memory_order_relaxed);
     scheduler->dispatched_count = 0u;
+    scheduler->underrun_count = 0u;
     scheduler->min_lateness_us = 0;
     scheduler->max_lateness_us = 0;
     scheduler->sum_lateness_us = 0;
     scheduler->sample_count = 0u;
     scheduler->samples_truncated = false;
     (void)arm_next(scheduler);
+}
+
+void pico_playback_scheduler_reset_sequence(
+    pico_playback_scheduler_t *scheduler) {
+    if (scheduler == NULL || scheduler->running) {
+        return;
+    }
+    scheduler->sequence_ended = false;
+    scheduler->waiting_for_event = false;
+    scheduler->underrun_active = false;
+}
+
+void pico_playback_scheduler_mark_sequence_ended(
+    pico_playback_scheduler_t *scheduler) {
+    if (scheduler != NULL) {
+        scheduler->sequence_ended = true;
+    }
 }
 
 void pico_playback_scheduler_stop(pico_playback_scheduler_t *scheduler) {
@@ -189,6 +229,11 @@ void pico_playback_scheduler_task(pico_playback_scheduler_t *scheduler) {
         return;
     }
     while (scheduler->running) {
+        if (scheduler->waiting_for_event) {
+            if (!arm_next(scheduler)) {
+                return;
+            }
+        }
         const bool fired = atomic_exchange_explicit(
             &scheduler->alarm_fired, false, memory_order_relaxed);
         if (!fired && time_us_64() < scheduler->next_deadline_us) {
@@ -196,9 +241,11 @@ void pico_playback_scheduler_task(pico_playback_scheduler_t *scheduler) {
         }
         pico_playback_queue_event_t event;
         if (!pico_playback_queue_peek(scheduler->queue, &event)) {
-            // Defensive: due but nothing queued. Treat like natural
-            // completion rather than spinning.
-            finish(scheduler, PICO_UART_REASON_FINISHED);
+            if (scheduler->sequence_ended) {
+                finish(scheduler, PICO_UART_REASON_FINISHED);
+            } else {
+                begin_underrun(scheduler);
+            }
             return;
         }
         if (scheduler->callbacks.send_report == NULL ||
@@ -209,7 +256,13 @@ void pico_playback_scheduler_task(pico_playback_scheduler_t *scheduler) {
             // Do not pop and do not recompute the deadline.
             return;
         }
+        const bool queue_was_full =
+            pico_playback_queue_free_capacity(scheduler->queue) == 0u;
         (void)pico_playback_queue_pop(scheduler->queue, &event);
+        if (queue_was_full && !scheduler->sequence_ended &&
+            scheduler->callbacks.on_buffer_available != NULL) {
+            scheduler->callbacks.on_buffer_available(scheduler->callbacks.user);
+        }
         const uint64_t dispatch_time_us = time_us_64();
         int64_t lateness_us =
             (int64_t)dispatch_time_us - (int64_t)scheduler->next_deadline_us;

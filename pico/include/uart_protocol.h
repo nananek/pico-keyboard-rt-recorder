@@ -95,4 +95,7 @@ bool pico_uart_type_known(uint8_t type);
 bool pico_uart_type_is_command(uint8_t type);
 bool pico_uart_frame_payload_valid(const pico_uart_frame_t *frame);
 
+/* Queue command state guard shared by main.c and host tests. */
+bool pico_uart_queue_command_allowed(uint8_t type, uint8_t state);
+
 #endif

@@ -52,10 +52,16 @@ is PLAYING the main loop calls `tight_loop_contents()` instead of its usual
 1 ms `sleep_ms`, trading 100% CPU use during playback for sub-millisecond
 scheduling precision; every other mode keeps the 1 ms sleep.
 
-The queue draining to empty ends the run with `PLAY_FINISHED`; `PLAY_ABORT`,
-a direct `MODE_SET(PASS)`, or a fault entering ERROR while PLAYING ends it
-early with `PLAY_ABORTED` instead, in both cases immediately followed by one
-`PLAY_METRICS` frame. The scheduler accumulates dispatched_count and
+The queue draining to empty ends the run with `PLAY_FINISHED` only after
+`QUEUE_END` has closed the sequence. If an open sequence becomes empty, the
+scheduler stays running, increments its underrun count, and emits one
+`PLAY_UNDERRUN` for that contiguous empty interval. A later `QUEUE_EVENT`
+re-arms directly against its original `playback_start_us + offset_us`; neither
+the epoch nor later deadlines move, and late arrival is visible in the
+ordinary lateness metrics. `PLAY_ABORT`, a direct `MODE_SET(PASS)`, or a fault
+entering ERROR while PLAYING ends the run early with `PLAY_ABORTED` instead,
+in both terminal cases immediately followed by one `PLAY_METRICS` frame. The
+scheduler accumulates dispatched_count, underrun_count, and
 min/max/sum lateness in O(1) on every successful dispatch, and separately
 keeps up to 2048 raw per-event lateness samples; p95/p99 are computed once,
 at run end, by sorting that retained sample set (never on the hot path), so
@@ -63,15 +69,17 @@ per-event dispatch cost stays constant regardless of run length. See
 `docs/protocol.md` for the exact `PLAY_STARTED`/`PLAY_FINISHED`/
 `PLAY_ABORTED`/`PLAY_METRICS` payloads and reasons.
 
-The playback queue itself is a fixed-capacity ring buffer, filled only while
-ARMED. `QUEUE_CLEAR`/`QUEUE_EVENT`/`QUEUE_END` each reply with `BUFFER_STATUS`
-(state plus queued/free slot counts) so Zero can pace `QUEUE_EVENT` sends
-against Pico-advertised capacity instead of a fixed window; a `QUEUE_EVENT`
-that arrives once the queue is full is treated as a protocol violation, not a
-silent drop. `QUEUE_END` additionally emits `PLAY_READY` once, and `PLAY_START`
-deliberately leaves the queue intact — only `PLAY_ABORT`, a transition to
-PASS, or a fault entering ERROR discards queued playback events, mirroring how
-those same transitions discard queued physical reports (and, whenever the
-scheduler is currently running, first stops it and reports its metrics so
-far -- see above). Draining the queue against the playback epoch is the
-scheduler's job, described above.
+The playback queue itself is a fixed-capacity ring buffer. `QUEUE_CLEAR` opens
+a new sequence in ARMED; `QUEUE_EVENT` and `QUEUE_END` remain valid after
+PLAY_START so Zero can refill and close a sequence while PLAYING. Each command
+replies with `BUFFER_STATUS` (state plus queued/free slot counts), and dispatch
+from a full open queue emits one additional status when the first slot becomes
+free. Zero uses those credits with a bounded four-command pipeline: UART
+acknowledgements and queue space control feeding, while Zero wall-clock sleeps
+never schedule HID output. A `QUEUE_EVENT` beyond advertised capacity is a
+protocol violation, not a silent drop. ARMED `QUEUE_END` also emits
+`PLAY_READY`; PLAYING `QUEUE_END` does not. `PLAY_START` deliberately leaves
+the queue intact — only `PLAY_ABORT`, a transition to PASS, or a fault entering
+ERROR discards queued playback events, mirroring queued physical reports (and,
+whenever the scheduler is running, first stopping it and reporting metrics so
+far).

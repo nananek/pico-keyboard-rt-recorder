@@ -11,9 +11,9 @@ enum {
     // 512 entries is 12KB of RP2350 SRAM (520KB total) -- each entry is 24
     // bytes (the uint64_t offset pads the struct past its 17 packed field
     // bytes), well within budget for a streaming flow-control window. This
-    // is not sized to hold whole recordings; the Zero feeder (a future
-    // phase) streams events against BUFFER_STATUS credits instead of
-    // requiring the full sequence to fit.
+    // is not sized to hold whole recordings; the Zero feeder streams events
+    // against BUFFER_STATUS credits instead of requiring the full sequence
+    // to fit.
     PICO_PLAYBACK_QUEUE_CAPACITY = 512u,
 };
 
@@ -23,7 +23,7 @@ typedef struct {
     pico_hid_boot_keyboard_report_t report;
 } pico_playback_queue_event_t;
 
-// TinyUSB host/UART callbacks and the (future) scheduler consumer all run
+// TinyUSB host/UART callbacks and the scheduler consumer all run
 // from the main loop in this phase, so this bounded FIFO deliberately has no
 // cross-core synchronization.
 typedef struct {

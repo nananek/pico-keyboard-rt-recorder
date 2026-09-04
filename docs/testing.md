@@ -15,7 +15,9 @@ not discard the playback queue it is about to consume, while `PLAY_ABORT` and
 any fault entering ERROR do; it also covers `pico_mode_state_play_finish`
 (PLAYING to ARMED with reason FINISHED, invalid from every other state). The
 UART protocol test covers the `PLAY_STARTED`/`PLAY_FINISHED`/`PLAY_ABORTED`/
-`PLAY_METRICS` payload length boundaries. The playback scheduler test fakes
+`PLAY_UNDERRUN`/`PLAY_METRICS` payload length boundaries and the queue-command
+state guard (`QUEUE_EVENT`/`QUEUE_END` in ARMED or PLAYING, `QUEUE_CLEAR` only
+in ARMED). The playback scheduler test fakes
 the `pico/time.h` hardware alarm API (`add_alarm_at`, `cancel_alarm`,
 `from_us_since_boot`) the same way the host adapter test fakes
 `time_us_64()`, and covers: dispatch order and per-event deadlines against
@@ -25,8 +27,11 @@ shifting later deadlines; that a busy HID endpoint retries the same queued
 head event via `pico_playback_queue_peek` without reordering or dropping it;
 `stop()` reporting partial metrics with reason ABORTED mid-run and being a
 no-op once not running; min/max/sum/p95/p99 lateness matched against a
-hand-computed sample set; and `samples_truncated` once a run dispatches more
-events than the fixed 2048-sample log holds. The main-output integration
+hand-computed sample set; `samples_truncated` once a run dispatches more
+events than the fixed 2048-sample log holds; an open empty sequence remaining
+PLAYING with one edge-triggered underrun notification; late refill retaining
+the original absolute deadline; and a full queue granting new flow-control
+credit after its first pop. The main-output integration
 test verifies that PASS keeps its FIFO through a failed release, the
 release-sent iteration, and a normal HID-not-ready result; it also verifies
 that RECORD drains to UART while HID output is blocked. Only a validated
@@ -56,6 +61,14 @@ They also cover `QUEUE_CLEAR`/`QUEUE_EVENT`/`QUEUE_END` encoding and
 `QUEUE_EVENT` sends within the Pico-advertised `free_capacity` and surfaces a
 protocol error rather than exceeding it.
 
+Playback feeder tests cover speed 1.0/2.0/0.5 offset expansion, invalid speed,
+500 ms prebuffer selection, short recordings closed before PLAY_START, long
+recordings streamed beyond a deliberately tiny fake Pico capacity, four-event
+pipeline writes, asynchronous credit renewal, underrun credit/diagnostics,
+explicit PLAY_ABORT outcome/metrics consumption, and rejection when 500 ms of
+events cannot fit the advertised Pico capacity. No test advances a Linux timer
+to schedule an HID report; all reports carry future Pico-relative offsets.
+
 ## Hardware acceptance
 
 1. Verify the fixed wiring: UART0 GP0 TX/GP1 RX crossed to the Zero with common
@@ -76,9 +89,11 @@ protocol error rather than exceeding it.
    `queued_count`/`free_capacity` tracking the pushes, and a single
    `PLAY_READY` after `QUEUE_END`. Send `QUEUE_EVENT` frames past the
    advertised `free_capacity` and confirm ERROR (all-release, blocked input,
-   queue discarded) rather than a silently dropped event. Send a queue command
-   while in PASS or RECORD and confirm the same wrong-state protocol-error
-   behaviour as any other unexpected command. Confirm `PLAY_START` after a
+   queue discarded) rather than a silently dropped event. While PLAYING,
+   confirm `QUEUE_EVENT` and `QUEUE_END` remain accepted but `QUEUE_CLEAR`
+   enters ERROR. Send any queue command while in PASS or RECORD and confirm
+   the same wrong-state protocol-error behaviour as any other unexpected
+   command. Confirm `PLAY_START` after a
    fresh `QUEUE_CLEAR`/`QUEUE_EVENT`/`QUEUE_END` load does not itself trigger
    another `BUFFER_STATUS` or clear the just-loaded queue.
 7. Inject bad CRC/version/length bytes and UART framing errors. Confirm ERROR,
@@ -117,6 +132,17 @@ protocol error rather than exceeding it.
     confirm `dispatched_count == 1000`, `samples_truncated == false` (1000 is
     under the 2048-sample cap), and record min/max/mean (`sum_lateness_us /
     dispatched_count`)/p95/p99 lateness for the acceptance record.
+12. Stream more than 512 events from Zero. When the queue becomes full, confirm
+    the first subsequent dispatch emits an asynchronous `BUFFER_STATUS` with
+    positive free capacity, feeding resumes without exceeding advertised
+    credit, and PLAYING `QUEUE_END` emits no `PLAY_READY`. Confirm the run ends
+    only after all queued events following that marker dispatch.
+13. During an open streaming sequence, deliberately stop Zero feeding until
+    the Pico queue empties. Confirm exactly one `PLAY_UNDERRUN` for the empty
+    interval and no `PLAY_FINISHED`; resume with an event whose absolute
+    deadline is already past, then send `QUEUE_END`. Confirm it dispatches
+    immediately, lateness reflects the whole stall (the deadline did not
+    shift), `underrun_count` increments, and normal completion follows.
 
 UART event time is not used as a HID deadline; playback deadlines are the
 hardware-alarm-driven absolute `playback_start_us + offset_us` values
@@ -141,3 +167,13 @@ checked against the Pico hardware timer.
    both cases confirm the recorder attempts PASS before serial close and that
    no new partial JSON file appears. Reconnect and explicitly run `stop` if
    the disconnect prevented acknowledgement.
+6. Run `PYTHONPATH=zero python3 -m app --recordings-dir zero/recordings play hello --device /dev/serial0`.
+   Confirm at least 500 ms (or the entire shorter recording) is queued before
+   PLAY_START, long recordings continue sending in PLAYING, the final
+   QUEUE_END is acknowledged without PLAY_READY, and the JSON result contains
+   PLAY_METRICS. Confirm the CLI returns the Pico to PASS afterward. Repeat
+   with `--speed 2.0` and verify the absolute offsets are halved while their
+   common Pico epoch and relative timing remain intact.
+7. Interrupt a long `play` command with Ctrl-C. Confirm `PLAY_ABORTED`, then
+   `PLAY_METRICS`, then `MODE_CHANGED(ARMED, ABORTED)` are consumed in order,
+   followed by a successful transition to PASS before the serial port closes.

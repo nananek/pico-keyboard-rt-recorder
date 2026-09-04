@@ -35,6 +35,10 @@ PLAY_METRICS = 0x0C
 QUEUE_CLEAR = 0x80
 QUEUE_EVENT = 0x81
 QUEUE_END = 0x82
+PLAY_START = 0x83
+PLAY_ABORT = 0x84
+STATUS_REQUEST = 0x85
+PING = 0x86
 MODE_SET = 0x87
 
 PICO_TO_ZERO_TYPES = frozenset(range(RECORD_EVENT, PLAY_METRICS + 1))
@@ -48,6 +52,9 @@ MODE_ERROR = 4
 VALID_MODES = frozenset((MODE_PASS, MODE_RECORD, MODE_ARMED, MODE_PLAYING, MODE_ERROR))
 
 REASON_OK = 0
+REASON_ABORTED = 5
+REASON_UNDERRUN = 6
+REASON_FINISHED = 7
 VALID_REASONS = frozenset(range(0, 8))
 
 
@@ -65,6 +72,18 @@ def crc16_ccitt_false(data: bytes | bytearray | memoryview) -> int:
 class Frame:
     message_type: int
     payload: bytes
+
+
+@dataclass(frozen=True)
+class PlayMetrics:
+    dispatched_count: int
+    underrun_count: int
+    min_lateness_us: int
+    max_lateness_us: int
+    sum_lateness_us: int
+    p95_lateness_us: int
+    p99_lateness_us: int
+    samples_truncated: bool
 
 
 def encode_frame(message_type: int, payload: bytes = b"") -> bytes:
@@ -99,8 +118,18 @@ def encode_queue_event(offset_us: int, report: bytes) -> bytes:
 
 
 def encode_queue_end() -> bytes:
-    """Encode QUEUE_END, marking the loaded sequence complete. Valid in ARMED."""
+    """Encode QUEUE_END, marking the loaded/streamed sequence complete."""
     return encode_frame(QUEUE_END)
+
+
+def encode_play_start() -> bytes:
+    """Encode PLAY_START. Valid after prebuffering in ARMED."""
+    return encode_frame(PLAY_START)
+
+
+def encode_play_abort() -> bytes:
+    """Encode PLAY_ABORT. Valid in ARMED or PLAYING."""
+    return encode_frame(PLAY_ABORT)
 
 
 class IncrementalDecoder:
@@ -223,6 +252,36 @@ def validate_buffer_status(frame: Frame) -> tuple[int, int, int]:
     if state not in VALID_MODES:
         raise ProtocolError(f"BUFFER_STATUS has invalid state {state}")
     return state, queued_count, free_capacity
+
+
+def validate_play_started(frame: Frame) -> int:
+    """Validate PLAY_STARTED and return the Pico playback epoch."""
+    if frame.message_type != PLAY_STARTED:
+        raise ProtocolError("expected PLAY_STARTED")
+    if len(frame.payload) != 8:
+        raise ProtocolError(f"PLAY_STARTED payload must be 8 bytes, got {len(frame.payload)}")
+    return struct.unpack("<Q", frame.payload)[0]
+
+
+def validate_play_underrun(frame: Frame) -> tuple[int, int]:
+    """Return (elapsed_offset_us, free_capacity) for PLAY_UNDERRUN."""
+    if frame.message_type != PLAY_UNDERRUN:
+        raise ProtocolError("expected PLAY_UNDERRUN")
+    if len(frame.payload) != 10:
+        raise ProtocolError(f"PLAY_UNDERRUN payload must be 10 bytes, got {len(frame.payload)}")
+    return struct.unpack("<QH", frame.payload)
+
+
+def validate_play_metrics(frame: Frame) -> PlayMetrics:
+    """Validate and unpack one end-of-run PLAY_METRICS frame."""
+    if frame.message_type != PLAY_METRICS:
+        raise ProtocolError("expected PLAY_METRICS")
+    if len(frame.payload) != 33:
+        raise ProtocolError(f"PLAY_METRICS payload must be 33 bytes, got {len(frame.payload)}")
+    values = struct.unpack("<IIiiqiiB", frame.payload)
+    if values[-1] not in (0, 1):
+        raise ProtocolError("PLAY_METRICS samples_truncated must be zero or one")
+    return PlayMetrics(*values[:-1], bool(values[-1]))
 
 
 def pico_payload_is_valid(message_type: int, payload: bytes) -> bool:

@@ -52,9 +52,22 @@ typedef void (*pico_playback_scheduler_complete_t)(
     uint8_t reason,
     const pico_playback_scheduler_metrics_t *metrics);
 
+// Emitted once when a non-ended sequence first runs out of queued events.
+// elapsed_offset_us is measured from the unchanged Pico playback epoch.
+typedef void (*pico_playback_scheduler_underrun_t)(
+    void *user,
+    uint64_t elapsed_offset_us,
+    uint16_t free_capacity);
+
+// Emitted when a streaming queue transitions from full to having space, so
+// Zero can obtain fresh flow-control credit without polling or scheduling.
+typedef void (*pico_playback_scheduler_buffer_available_t)(void *user);
+
 typedef struct {
     pico_playback_scheduler_send_t send_report;
     pico_playback_scheduler_complete_t on_complete;
+    pico_playback_scheduler_underrun_t on_underrun;
+    pico_playback_scheduler_buffer_available_t on_buffer_available;
     void *user;
 } pico_playback_scheduler_callbacks_t;
 
@@ -63,6 +76,9 @@ typedef struct {
     pico_playback_scheduler_callbacks_t callbacks;
 
     bool running;
+    bool sequence_ended;
+    bool waiting_for_event;
+    bool underrun_active;
     uint64_t playback_start_us;
     uint64_t next_deadline_us;
 
@@ -75,6 +91,7 @@ typedef struct {
 
     // O(1) running metrics, updated on every successful dispatch.
     uint32_t dispatched_count;
+    uint32_t underrun_count;
     int32_t min_lateness_us;
     int32_t max_lateness_us;
     int64_t sum_lateness_us;
@@ -98,6 +115,16 @@ void pico_playback_scheduler_start(
     pico_playback_scheduler_t *scheduler,
     uint64_t playback_start_us);
 
+// Begins a newly loaded sequence. Call with the scheduler stopped when
+// QUEUE_CLEAR (or a mode transition that discards the queue) is processed.
+void pico_playback_scheduler_reset_sequence(
+    pico_playback_scheduler_t *scheduler);
+
+// Marks that no more QUEUE_EVENTs will arrive for the current sequence.
+// May be called before PLAY_START or while the scheduler is running.
+void pico_playback_scheduler_mark_sequence_ended(
+    pico_playback_scheduler_t *scheduler);
+
 // Cancels any armed hardware alarm and ends the run early, invoking
 // on_complete with reason PICO_UART_REASON_ABORTED and the metrics collected
 // so far. Does not touch the queue itself -- the caller is responsible for
@@ -109,8 +136,9 @@ void pico_playback_scheduler_stop(pico_playback_scheduler_t *scheduler);
 // alarm-fired flag or a direct time_us_64() comparison), retrying the same
 // head event without popping it when send_report fails so order and content
 // are preserved. Arms a single hardware alarm for the next deadline once one
-// remains in the future; calls on_complete with reason
-// PICO_UART_REASON_FINISHED exactly once when the queue empties naturally.
+// remains in the future. An empty ended sequence completes normally; an
+// empty open sequence remains running and reports one underrun per empty
+// interval while it waits for streaming refill.
 void pico_playback_scheduler_task(pico_playback_scheduler_t *scheduler);
 
 bool pico_playback_scheduler_is_running(
