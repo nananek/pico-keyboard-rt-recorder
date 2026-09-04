@@ -69,11 +69,22 @@ per Issue #26:
   and RP235x range. 12.000MHz center frequency; frequency tolerance at
   +25C **+/-30 ppm**; frequency stability over -40C..+85C (ref. +25C)
   **+/-30 ppm**; aging **+/-5 ppm/year** (1st year, @25+/-3C). Worst-case
-  combined tolerance+stability (~60 ppm) accumulates only ~60us of drift per
-  1000 seconds (~16.7 minutes) of recording -- roughly three orders of
-  magnitude below the RECORD-mode jitter bound above, before or after the
-  200us tightening. Crystal drift is not a meaningful contributor to timing
-  accuracy at any recording length this project targets.
+  combined tolerance+stability (~60 ppm) accumulates ~60us of drift per
+  *second* of elapsed time -- **~60ms accumulated over 1000 seconds
+  (~16.7 minutes)** of continuous recording, not ~60us as a naive reading of
+  "60 ppm over 1000 seconds" might suggest. That accumulation is a slow,
+  smooth systematic skew in the absolute time base, not per-event jitter, so
+  it is the wrong quantity to compare directly against the RECORD-mode
+  jitter bound above (a per-event, non-cumulative noise term): for a
+  typical few-millisecond to few-hundred-millisecond gap between two
+  consecutively captured events, 60 ppm contributes only tens of
+  nanoseconds to a few microseconds of extra `dt_us` error -- one to four
+  orders of magnitude below the jitter bound for realistic inter-keystroke
+  intervals, only approaching the same order of magnitude for an atypical
+  gap near a full second. Crystal drift is not a meaningful contributor to
+  recorded inter-event timing at any recording length this project targets;
+  it would only matter for an absolute wall-clock alignment this project
+  does not attempt.
 - **Hardware-level RX timestamp inside Pico-PIO-USB: investigated, not
   recommended.** A timestamp taken where `pio_usb.c`'s low-level RX path
   exits its busy-wait on the PIO hardware IRQ completion flag
