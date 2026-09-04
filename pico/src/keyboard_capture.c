@@ -17,6 +17,7 @@ void pico_keyboard_capture_clear(pico_keyboard_capture_t *capture) {
     capture->read_index = 0u;
     capture->write_index = 0u;
     capture->count = 0u;
+    capture->head_recorded = false;
 }
 
 bool pico_keyboard_capture_push(
@@ -62,6 +63,7 @@ bool pico_keyboard_capture_pop(
     capture->read_index =
         (capture->read_index + 1u) % PICO_KEYBOARD_CAPTURE_CAPACITY;
     --capture->count;
+    capture->head_recorded = false;
     return true;
 }
 
@@ -84,4 +86,15 @@ pico_keyboard_capture_stats_t pico_keyboard_capture_get_stats(
     }
 
     return capture->stats;
+}
+
+bool pico_keyboard_capture_head_recorded(const pico_keyboard_capture_t *capture) {
+    return capture != NULL && capture->count != 0u && capture->head_recorded;
+}
+
+void pico_keyboard_capture_mark_head_recorded(pico_keyboard_capture_t *capture) {
+    if (capture == NULL || capture->count == 0u) {
+        return;
+    }
+    capture->head_recorded = true;
 }

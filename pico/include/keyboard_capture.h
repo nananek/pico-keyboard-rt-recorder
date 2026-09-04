@@ -31,6 +31,13 @@ typedef struct {
     size_t write_index;
     size_t count;
     pico_keyboard_capture_stats_t stats;
+    // Whether the current FIFO head has already been sent as a RECORD_EVENT.
+    // Lets RECORD keep a single read_index while still emitting the record
+    // exactly once, independent of how many times the same head is retried
+    // against a busy HID endpoint. Reset whenever the head advances (pop) or
+    // the FIFO is discarded (clear), so a fresh head always starts
+    // unrecorded.
+    bool head_recorded;
 } pico_keyboard_capture_t;
 
 void pico_keyboard_capture_init(pico_keyboard_capture_t *capture);
@@ -56,5 +63,12 @@ bool pico_keyboard_capture_peek(
 
 pico_keyboard_capture_stats_t pico_keyboard_capture_get_stats(
     const pico_keyboard_capture_t *capture);
+
+// Whether the current FIFO head (the report peek would return) has already
+// been sent as a RECORD_EVENT. False for an empty FIFO.
+bool pico_keyboard_capture_head_recorded(const pico_keyboard_capture_t *capture);
+
+// Marks the current FIFO head as recorded. No-op on an empty FIFO.
+void pico_keyboard_capture_mark_head_recorded(pico_keyboard_capture_t *capture);
 
 #endif  // PICO_KEYBOARD_RT_KEYBOARD_CAPTURE_H
