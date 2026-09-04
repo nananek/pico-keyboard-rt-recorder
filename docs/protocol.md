@@ -150,7 +150,11 @@ nearest-rank method (`rank = ceil(p * n / 100)`, 1-based, into the
 ascending-sorted retained samples) computed once at run end over up to 2048
 raw lateness samples; `min`/`max`/`sum`/`dispatched_count` cover every
 dispatched event regardless of that cap, and `samples_truncated` is nonzero
-only when a run dispatches more than 2048 events.
+only when a run dispatches more than 2048 events. `max_lateness_us` on a
+PLAYING run typically reflects a bounded, expected first-event HID-endpoint
+artifact rather than steady-state scheduling quality; see
+`docs/realtime-design.md` for why, and prefer `p95`/`p99`/`min` when
+assessing real-time performance.
 
 `PLAY_UNDERRUN` is 10 bytes: `elapsed_offset_us u64 LE`, the elapsed offset
 from the unchanged Pico playback epoch when the open sequence first became
