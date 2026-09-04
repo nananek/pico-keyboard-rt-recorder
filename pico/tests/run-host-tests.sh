@@ -66,3 +66,13 @@ build_and_run main_dispatch \
     "$test_root/hid_keyboard_host_test.c" \
     -o "$test_directory/hid_keyboard_host"
 "$test_directory/hid_keyboard_host"
+
+# Needs the pico/time.h alarm-API fakes under stubs/, like hid_keyboard_host
+# above.
+"$compiler" -std=c11 -Wall -Wextra -Werror \
+    -I"$test_root/stubs" -I"$include_root" \
+    "$test_root/../src/playback_queue.c" \
+    "$test_root/../src/playback_scheduler.c" \
+    "$test_root/playback_scheduler_test.c" \
+    -o "$test_directory/playback_scheduler"
+"$test_directory/playback_scheduler"

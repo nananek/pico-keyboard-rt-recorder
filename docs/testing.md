@@ -3,22 +3,36 @@
 ## Automated checks
 
 `sh pico/tests/run-host-tests.sh` builds with `-Wall -Wextra -Werror` and runs
-the report layout, pin contract, capture FIFO, playback queue, UART
-protocol/CRC, UART ring and parser, mode transition, and host adapter tests.
-These cover split frames, bad magic/version/length/CRC, unknown
-direction/type, ring order and overflow, command/TX-ring saturation,
+the report layout, pin contract, capture FIFO, playback queue, playback
+scheduler, UART protocol/CRC, UART ring and parser, mode transition, and host
+adapter tests. These cover split frames, bad magic/version/length/CRC,
+unknown direction/type, ring order and overflow, command/TX-ring saturation,
 idempotent MODE_SET, invalid targets/transitions, all-release retry/queue
 clearing, and physical input blocking. The playback queue test covers FIFO
 order, capacity rejection, and clearing. The mode transition test also proves
 that `PLAY_START` releases physical input like any other transition but does
 not discard the playback queue it is about to consume, while `PLAY_ABORT` and
-any fault entering ERROR do. The main-output integration test verifies that
-PASS keeps its FIFO through a failed release, the release-sent iteration, and
-a normal HID-not-ready result; it also verifies that RECORD drains to UART
-while HID output is blocked. Only a validated command can request a mode
-change. In particular, a repeated PASS command and a transport or
-malformed-frame fault received in PASS do not release a held key or clear
-accepted physical input.
+any fault entering ERROR do; it also covers `pico_mode_state_play_finish`
+(PLAYING to ARMED with reason FINISHED, invalid from every other state). The
+UART protocol test covers the `PLAY_STARTED`/`PLAY_FINISHED`/`PLAY_ABORTED`/
+`PLAY_METRICS` payload length boundaries. The playback scheduler test fakes
+the `pico/time.h` hardware alarm API (`add_alarm_at`, `cancel_alarm`,
+`from_us_since_boot`) the same way the host adapter test fakes
+`time_us_64()`, and covers: dispatch order and per-event deadlines against
+both the alarm-fired flag and the `time_us_64()` polling fallback; that a
+long stall before a `task()` call drains every already-due event without
+shifting later deadlines; that a busy HID endpoint retries the same queued
+head event via `pico_playback_queue_peek` without reordering or dropping it;
+`stop()` reporting partial metrics with reason ABORTED mid-run and being a
+no-op once not running; min/max/sum/p95/p99 lateness matched against a
+hand-computed sample set; and `samples_truncated` once a run dispatches more
+events than the fixed 2048-sample log holds. The main-output integration
+test verifies that PASS keeps its FIFO through a failed release, the
+release-sent iteration, and a normal HID-not-ready result; it also verifies
+that RECORD drains to UART while HID output is blocked. Only a validated
+command can request a mode change. In particular, a repeated PASS command
+and a transport or malformed-frame fault received in PASS do not release a
+held key or clear accepted physical input.
 
 `git diff --check` is required before commit. Docker CI additionally performs
 the normal and HID-demo Pico SDK builds with TinyUSB's pinned Pico-PIO-USB
@@ -72,9 +86,42 @@ protocol error rather than exceeding it.
    `MODE_SET(PASS)` while ARMED or PLAYING. In PASS, confirm the same malformed
    input leaves a held key intact while reporting the fault. Disconnect/reconnect
    UART and repeat.
+8. While ARMED, load a short recording (`QUEUE_CLEAR`/`QUEUE_EVENT`.../
+   `QUEUE_END`) with a handful of events at known offsets, then send
+   `PLAY_START`. Confirm `PLAY_STARTED` carries a `playback_start_us` sampled
+   at that moment, and use a logic analyzer or scope on the native USB D+/D-
+   lines (or the PC-side HID report timestamps) to confirm each report is
+   emitted at `playback_start_us + offset_us`, not chained from the previous
+   report or from UART receive time.
+9. Let that recording drain to completion. Confirm exactly one
+   `PLAY_FINISHED` (no payload), followed by one `PLAY_METRICS` frame with
+   `dispatched_count` equal to the loaded event count, `underrun_count == 0`,
+   and `max_lateness_us` under 1000 (sub-millisecond, the Issue #7 acceptance
+   target), followed by `MODE_CHANGED(ARMED, FINISHED)`.
+10. Repeat step 8 but send `PLAY_ABORT` partway through playback. Confirm an
+    all-keys-release report and, on the wire in this order, exactly one
+    `PLAY_ABORTED`, one `PLAY_METRICS` frame whose `dispatched_count` is less
+    than the full load and reflects only the events that fired before the
+    abort, and then `MODE_CHANGED(ARMED, ABORTED)` -- the same
+    outcome-frame/metrics/MODE_CHANGED order as step 9. Confirm a following
+    `PLAY_START` from a freshly reloaded queue behaves like step 8/9 again
+    (the aborted run's
+    state does not leak into the next one).
+11. Flash the self-contained benchmark image
+    (`cmake -DPICO_PLAYBACK_SCHED_TEST=ON ...`, see `pico/CMakeLists.txt`).
+    With no UART traffic at all, it drives itself through PASS -> ARMED ->
+    `PLAY_START` and keeps refilling the queue past its fixed 512-entry
+    capacity until 1000 synthetic events at a 10 ms nominal spacing have been
+    dispatched, then reports the same `PLAY_FINISHED` + `PLAY_METRICS` pair
+    as any other run. Capture the raw `PLAY_METRICS` frame from UART0 and
+    confirm `dispatched_count == 1000`, `samples_truncated == false` (1000 is
+    under the 2048-sample cap), and record min/max/mean (`sum_lateness_us /
+    dispatched_count`)/p95/p99 lateness for the acceptance record.
 
-UART event time is not used as a HID deadline. Playback timing must be checked
-against the Pico hardware timer in the later playback acceptance phase.
+UART event time is not used as a HID deadline; playback deadlines are the
+hardware-alarm-driven absolute `playback_start_us + offset_us` values
+described in `docs/realtime-design.md`, and steps 8-11 above are how that is
+checked against the Pico hardware timer.
 
 ## Zero recorder acceptance
 

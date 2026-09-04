@@ -55,7 +55,9 @@ feeds the queue, and controls the UI. The boundary is framed binary UART0
 - Keep Pico firmware in C/C++ with Pico SDK/TinyUSB and Zero services under
   `zero/`.
 - Keep real-time metrics available (deadline, dispatch time, lateness,
-  percentiles, event count, underruns).
+  percentiles, event count, underruns). The `PLAY_METRICS` UART frame
+  (`pico/src/playback_scheduler.c`) is this project's concrete implementation
+  of that requirement.
 - Add hardware-independent tests for each behavior and document acceptance in
   `README.md` and `docs/testing.md`.
 - Avoid inventing pin assignments. The fixed pins are UART0 GP0/GP1 and

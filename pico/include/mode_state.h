@@ -40,6 +40,10 @@ bool pico_mode_state_is_recording(const pico_mode_state_t *mode);
 bool pico_mode_state_handle_mode_set(pico_mode_state_t *mode, uint8_t target);
 bool pico_mode_state_play_start(pico_mode_state_t *mode);
 bool pico_mode_state_play_abort(pico_mode_state_t *mode);
+// PLAYING -> ARMED for a playback run that drained its queue naturally
+// (as opposed to pico_mode_state_play_abort, which is for PLAY_ABORT).
+// Reports PICO_UART_REASON_FINISHED. Fails outside PLAYING.
+bool pico_mode_state_play_finish(pico_mode_state_t *mode);
 void pico_mode_state_protocol_error(pico_mode_state_t *mode);
 void pico_mode_state_uart_fault(pico_mode_state_t *mode);
 

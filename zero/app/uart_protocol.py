@@ -30,13 +30,14 @@ PLAY_UNDERRUN = 0x08
 ERROR = 0x09
 PONG = 0x0A
 MODE_CHANGED = 0x0B
+PLAY_METRICS = 0x0C
 
 QUEUE_CLEAR = 0x80
 QUEUE_EVENT = 0x81
 QUEUE_END = 0x82
 MODE_SET = 0x87
 
-PICO_TO_ZERO_TYPES = frozenset(range(RECORD_EVENT, MODE_CHANGED + 1))
+PICO_TO_ZERO_TYPES = frozenset(range(RECORD_EVENT, PLAY_METRICS + 1))
 ZERO_TO_PICO_TYPES = frozenset(range(0x80, MODE_SET + 1))
 
 MODE_PASS = 0
@@ -47,7 +48,7 @@ MODE_ERROR = 4
 VALID_MODES = frozenset((MODE_PASS, MODE_RECORD, MODE_ARMED, MODE_PLAYING, MODE_ERROR))
 
 REASON_OK = 0
-VALID_REASONS = frozenset(range(0, 7))
+VALID_REASONS = frozenset(range(0, 8))
 
 
 def crc16_ccitt_false(data: bytes | bytearray | memoryview) -> int:
@@ -236,6 +237,10 @@ def pico_payload_is_valid(message_type: int, payload: bytes) -> bool:
         return len(payload) == 10
     if message_type == MODE_CHANGED:
         return len(payload) == 2
+    if message_type == PLAY_METRICS:
+        # dispatched_count u32, underrun_count u32, min/max_lateness_us i32,
+        # sum_lateness_us i64, p95/p99_lateness_us i32, samples_truncated u8.
+        return len(payload) == 33
     return len(payload) == 0
 
 

@@ -16,6 +16,9 @@ pico_sdk_init()
 option(PICO_HID_DEMO_TEST
        "Send one A press/release after USB mount for hardware acceptance testing"
        OFF)
+option(PICO_PLAYBACK_SCHED_TEST
+       "Self-contained 1000-event/10ms playback scheduler benchmark driven without UART input, for Issue #7 acceptance testing"
+       OFF)
 if(NOT TARGET tinyusb_pico_pio_usb)
     message(FATAL_ERROR
         "Pico-PIO-USB is unavailable. Initialize TinyUSB, then run "
@@ -31,6 +34,8 @@ add_executable(pico_keyboard_hid
     src/mode_state.c
     src/physical_report_dispatch.c
     src/playback_queue.c
+    src/playback_scheduler.c
+    src/playback_test_source.c
     src/safety_release.c
     src/uart_protocol.c
     src/uart_transport.c
@@ -50,6 +55,7 @@ target_link_libraries(pico_keyboard_hid PRIVATE
     tinyusb_board
     hardware_uart
     hardware_irq
+    hardware_timer
 )
 
 target_compile_definitions(pico_keyboard_hid PRIVATE
@@ -57,6 +63,7 @@ target_compile_definitions(pico_keyboard_hid PRIVATE
     BOARD_TUH_RHPORT=1
     PICO_DEFAULT_PIO_USB_DP_PIN=12
     PICO_HID_DEMO_TEST=$<BOOL:${PICO_HID_DEMO_TEST}>
+    PICO_PLAYBACK_SCHED_TEST=$<BOOL:${PICO_PLAYBACK_SCHED_TEST}>
 )
 
 # USB is exclusively the TinyUSB HID device in this phase; do not add an SDK

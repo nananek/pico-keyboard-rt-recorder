@@ -112,6 +112,19 @@ bool pico_mode_state_play_abort(pico_mode_state_t *mode) {
     return true;
 }
 
+bool pico_mode_state_play_finish(pico_mode_state_t *mode) {
+    if (mode == NULL || mode->state != PICO_UART_MODE_PLAYING) {
+        if (mode != NULL) {
+            notify(mode, PICO_UART_REASON_INVALID_TRANSITION);
+        }
+        return false;
+    }
+    clear_release_and_queue(mode);
+    mode->state = PICO_UART_MODE_ARMED;
+    notify(mode, PICO_UART_REASON_FINISHED);
+    return true;
+}
+
 static void enter_error(pico_mode_state_t *mode, uint8_t reason) {
     if (mode == NULL) {
         return;

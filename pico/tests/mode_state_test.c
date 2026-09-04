@@ -117,5 +117,30 @@ int main(void) {
     CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_PASS);
     CHECK(releases == 7u && clears == 7u && queue_clears == 6u);
 
+    // pico_mode_state_play_finish is the natural-completion analogue of
+    // play_abort: PLAYING -> ARMED, discarding the (now-empty) queue like
+    // play_abort, but reporting PICO_UART_REASON_FINISHED instead of
+    // ABORTED. It must fail outside PLAYING, same as play_start/play_abort
+    // fail outside their own valid source states.
+    CHECK(!pico_mode_state_play_finish(&mode));
+    CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_PASS);
+    CHECK(last_reason == PICO_UART_REASON_INVALID_TRANSITION);
+    CHECK(releases == 7u && clears == 7u && queue_clears == 6u);
+
+    CHECK(pico_mode_state_handle_mode_set(&mode, PICO_UART_MODE_ARMED));
+    CHECK(releases == 8u && clears == 8u && queue_clears == 7u);
+    CHECK(!pico_mode_state_play_finish(&mode));
+    CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_ARMED);
+    CHECK(last_reason == PICO_UART_REASON_INVALID_TRANSITION);
+    CHECK(releases == 8u && clears == 8u && queue_clears == 7u);
+
+    CHECK(pico_mode_state_play_start(&mode));
+    CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_PLAYING);
+    CHECK(releases == 9u && clears == 9u && queue_clears == 7u);
+    CHECK(pico_mode_state_play_finish(&mode));
+    CHECK(pico_mode_state_get(&mode) == PICO_UART_MODE_ARMED);
+    CHECK(last_reason == PICO_UART_REASON_FINISHED);
+    CHECK(releases == 10u && clears == 10u && queue_clears == 8u);
+
     return failures == 0 ? 0 : 1;
 }
