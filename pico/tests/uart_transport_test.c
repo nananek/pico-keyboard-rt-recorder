@@ -133,8 +133,10 @@ static void test_command_validation_and_overflow_faults(void) {
     CHECK(!pico_uart_transport_pop_command(&transport, &command));
 
     pico_uart_transport_init(&transport);
+    // 0x0D is the first Pico-to-Zero value still unassigned once
+    // PLAY_METRICS (0x0C) is in use.
     const uint8_t unknown_type[] = {
-        PICO_UART_PROTOCOL_MAGIC, PICO_UART_PROTOCOL_VERSION, 0x0Cu, 1u, 0u,
+        PICO_UART_PROTOCOL_MAGIC, PICO_UART_PROTOCOL_VERSION, 0x0Du, 1u, 0u,
         PICO_UART_MODE_ARMED, 0u, 0u,
     };
     uint8_t unknown_frame[sizeof(unknown_type)];

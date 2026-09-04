@@ -52,9 +52,19 @@ RUN cmake -S pico -B /tmp/pico-build-demo -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
     && cmake --build /tmp/pico-build-demo --target pico_keyboard_hid
 
+# Compile the opt-in self-contained playback scheduler benchmark (Issue #7)
+# as well, so a compile regression in that path is caught the same way as the
+# HID demo path above.
+RUN cmake -S pico -B /tmp/pico-build-playback-test -G Ninja \
+        -DPICO_BOARD=pico2 \
+        -DPICO_PLAYBACK_SCHED_TEST=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build /tmp/pico-build-playback-test --target pico_keyboard_hid
+
 # A successful final stage exposes the UF2 as the build result. The CI job only
 # needs `docker build --target verify`; a non-zero test or firmware build fails
 # before this stage is produced.
 FROM scratch AS verify
 COPY --from=pico-builder /tmp/pico-build/pico_keyboard_hid.uf2 /pico_keyboard_hid.uf2
 COPY --from=pico-builder /tmp/pico-build-demo/pico_keyboard_hid.uf2 /pico_keyboard_hid_demo.uf2
+COPY --from=pico-builder /tmp/pico-build-playback-test/pico_keyboard_hid.uf2 /pico_keyboard_hid_playback_test.uf2

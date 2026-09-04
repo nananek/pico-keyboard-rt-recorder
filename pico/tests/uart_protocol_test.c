@@ -82,12 +82,58 @@ static void test_command_payload_and_type_rules(void) {
     CHECK(pico_uart_frame_payload_valid(&status));
     CHECK(pico_uart_type_is_command(PICO_UART_MODE_SET));
     CHECK(!pico_uart_type_is_command(PICO_UART_MODE_CHANGED));
-    CHECK(!pico_uart_type_known(0x0Cu));
+    // 0x0D is the first Pico-to-Zero value still unassigned once PLAY_METRICS
+    // (0x0C) is in use.
+    CHECK(!pico_uart_type_known(0x0Du));
+}
+
+// PLAY_STARTED, PLAY_FINISHED, PLAY_ABORTED, and PLAY_METRICS previously had
+// no test coverage: PLAY_STARTED/PLAY_FINISHED/PLAY_ABORTED payload shapes
+// were reserved-but-unused, and PLAY_METRICS is new in Issue #7.
+static void test_playback_scheduler_message_payloads(void) {
+    pico_uart_frame_t frame = {
+        .version = PICO_UART_PROTOCOL_VERSION,
+        .type = PICO_UART_PLAY_STARTED,
+        .payload_len = 8u,
+    };
+    CHECK(pico_uart_frame_payload_valid(&frame));
+    frame.payload_len = 7u;
+    CHECK(!pico_uart_frame_payload_valid(&frame));
+    frame.payload_len = 9u;
+    CHECK(!pico_uart_frame_payload_valid(&frame));
+
+    // PLAY_FINISHED and PLAY_ABORTED carry no payload, like PLAY_READY.
+    frame.type = PICO_UART_PLAY_FINISHED;
+    frame.payload_len = 0u;
+    CHECK(pico_uart_frame_payload_valid(&frame));
+    frame.payload_len = 1u;
+    CHECK(!pico_uart_frame_payload_valid(&frame));
+
+    frame.type = PICO_UART_PLAY_ABORTED;
+    frame.payload_len = 0u;
+    CHECK(pico_uart_frame_payload_valid(&frame));
+    frame.payload_len = 1u;
+    CHECK(!pico_uart_frame_payload_valid(&frame));
+
+    // PLAY_METRICS: dispatched_count u32, underrun_count u32,
+    // min/max_lateness_us i32, sum_lateness_us i64, p95/p99_lateness_us i32,
+    // samples_truncated u8 = 33 bytes.
+    frame.type = PICO_UART_PLAY_METRICS;
+    frame.payload_len = 33u;
+    CHECK(pico_uart_frame_payload_valid(&frame));
+    frame.payload_len = 32u;
+    CHECK(!pico_uart_frame_payload_valid(&frame));
+    frame.payload_len = 34u;
+    CHECK(!pico_uart_frame_payload_valid(&frame));
+
+    CHECK(pico_uart_type_known(PICO_UART_PLAY_METRICS));
+    CHECK(!pico_uart_type_is_command(PICO_UART_PLAY_METRICS));
 }
 
 int main(void) {
     test_encode_decode_and_crc();
     test_decode_rejects_frame_errors();
     test_command_payload_and_type_rules();
+    test_playback_scheduler_message_payloads();
     return failures == 0 ? 0 : 1;
 }

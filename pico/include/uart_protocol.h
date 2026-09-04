@@ -26,6 +26,7 @@ enum {
     PICO_UART_ERROR = 0x09u,
     PICO_UART_PONG = 0x0Au,
     PICO_UART_MODE_CHANGED = 0x0Bu,
+    PICO_UART_PLAY_METRICS = 0x0Cu,
 };
 
 /* Zero-to-Pico messages. */
@@ -56,6 +57,7 @@ enum {
     PICO_UART_REASON_UART_FAULT = 4u,
     PICO_UART_REASON_ABORTED = 5u,
     PICO_UART_REASON_UNDERRUN = 6u,
+    PICO_UART_REASON_FINISHED = 7u,
 };
 
 typedef struct {

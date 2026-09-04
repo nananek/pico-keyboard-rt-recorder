@@ -14,15 +14,21 @@
 #include "mode_state.h"
 #include "physical_report_dispatch.h"
 #include "playback_queue.h"
+#include "playback_scheduler.h"
 #include "safety_release.h"
 #include "uart_protocol.h"
 #include "uart_transport.h"
+
+#if PICO_PLAYBACK_SCHED_TEST
+#include "playback_test_source.h"
+#endif
 
 static pico_keyboard_capture_t keyboard_capture;
 static pico_uart_transport_t uart_transport;
 static pico_mode_state_t mode_state;
 static pico_safety_release_t safety_release;
 static pico_playback_queue_t playback_queue;
+static pico_playback_scheduler_t playback_scheduler;
 
 static void mode_all_release(void *user) {
     (void)user;
@@ -54,8 +60,19 @@ static void write_u64_le(uint8_t *bytes, uint64_t value) {
     }
 }
 
+static void write_u32_le(uint8_t *bytes, uint32_t value) {
+    for (unsigned i = 0; i < 4u; ++i) {
+        bytes[i] = (uint8_t)(value & 0xFFu);
+        value >>= 8;
+    }
+}
+
 static void mode_clear_queue(void *user) {
     (void)user;
+    // Must run before the queue is discarded: stop() reports whatever
+    // partial metrics this run collected (a no-op if the scheduler is not
+    // currently running, e.g. PASS/RECORD/ARMED-from-PASS entry).
+    pico_playback_scheduler_stop(&playback_scheduler);
     pico_playback_queue_clear(&playback_queue);
 }
 
@@ -83,6 +100,46 @@ static bool send_pass_report(
     const pico_hid_boot_keyboard_report_t *report) {
     (void)user;
     return pico_hid_keyboard_send_boot_report(report);
+}
+
+// The scheduler's on_complete callback. Fires exactly once per playback run,
+// either from playback_scheduler's task() (queue drained naturally, reason
+// PICO_UART_REASON_FINISHED) or from its stop() (interrupted, reason
+// PICO_UART_REASON_ABORTED -- reached via mode_clear_queue whenever PLAYING
+// ends through PLAY_ABORT, a direct MODE_SET(PASS), or a fault entering
+// ERROR). PLAY_FINISHED additionally drives the PLAYING -> ARMED transition,
+// but that transition (and the MODE_CHANGED it sends) is deliberately
+// deferred to the end of this function: the ABORTED path's MODE_CHANGED
+// naturally arrives after PLAY_ABORTED/PLAY_METRICS (playback_complete runs
+// from inside mode_clear_queue, called before play_abort's own notify()), so
+// FINISHED queues its own PLAY_FINISHED/PLAY_METRICS first too, keeping both
+// end-of-playback paths in the same wire order for Zero.
+static void playback_complete(
+    void *user,
+    uint8_t reason,
+    const pico_playback_scheduler_metrics_t *metrics) {
+    pico_uart_transport_t *transport = (pico_uart_transport_t *)user;
+    if (reason == PICO_UART_REASON_FINISHED) {
+        (void)pico_uart_transport_queue_frame(
+            transport, PICO_UART_PLAY_FINISHED, NULL, 0u);
+    } else {
+        (void)pico_uart_transport_queue_frame(
+            transport, PICO_UART_PLAY_ABORTED, NULL, 0u);
+    }
+    uint8_t payload[33];
+    write_u32_le(payload, metrics->dispatched_count);
+    write_u32_le(payload + 4u, metrics->underrun_count);
+    write_u32_le(payload + 8u, (uint32_t)metrics->min_lateness_us);
+    write_u32_le(payload + 12u, (uint32_t)metrics->max_lateness_us);
+    write_u64_le(payload + 16u, (uint64_t)metrics->sum_lateness_us);
+    write_u32_le(payload + 24u, (uint32_t)metrics->p95_lateness_us);
+    write_u32_le(payload + 28u, (uint32_t)metrics->p99_lateness_us);
+    payload[32] = (uint8_t)metrics->samples_truncated;
+    (void)pico_uart_transport_queue_frame(
+        transport, PICO_UART_PLAY_METRICS, payload, sizeof(payload));
+    if (reason == PICO_UART_REASON_FINISHED) {
+        (void)pico_mode_state_play_finish(&mode_state);
+    }
 }
 
 static void send_status(void) {
@@ -180,9 +237,21 @@ static void dispatch_command(const pico_uart_frame_t *frame) {
         case PICO_UART_MODE_SET:
             (void)pico_mode_state_handle_mode_set(&mode_state, frame->payload[0]);
             break;
-        case PICO_UART_PLAY_START:
-            (void)pico_mode_state_play_start(&mode_state);
+        case PICO_UART_PLAY_START: {
+            // Sample the epoch once and hand the identical value to the
+            // scheduler and to Zero, so Zero's future QUEUE_EVENT offsets and
+            // the scheduler's deadlines agree on the same origin.
+            const uint64_t playback_start_us = time_us_64();
+            if (pico_mode_state_play_start(&mode_state)) {
+                pico_playback_scheduler_start(&playback_scheduler, playback_start_us);
+                uint8_t payload[8];
+                write_u64_le(payload, playback_start_us);
+                (void)pico_uart_transport_queue_frame(
+                    &uart_transport, PICO_UART_PLAY_STARTED, payload,
+                    sizeof(payload));
+            }
             break;
+        }
         case PICO_UART_PLAY_ABORT:
             (void)pico_mode_state_play_abort(&mode_state);
             break;
@@ -250,8 +319,17 @@ int main(void) {
         .user = &uart_transport,
     };
     pico_mode_state_init(&mode_state, &callbacks);
+    const pico_playback_scheduler_callbacks_t scheduler_callbacks = {
+        .send_report = send_pass_report,
+        .on_complete = playback_complete,
+        .user = &uart_transport,
+    };
+    pico_playback_scheduler_init(&playback_scheduler, &playback_queue, &scheduler_callbacks);
     pico_hid_keyboard_host_init(&keyboard_capture, &mode_state);
     pico_uart_transport_hw_init(&uart_transport);
+#if PICO_PLAYBACK_SCHED_TEST
+    pico_playback_test_source_init(&mode_state, &playback_queue, &playback_scheduler);
+#endif
 
     const tusb_rhport_init_t device_init = {
         .role = TUSB_ROLE_DEVICE,
@@ -286,13 +364,25 @@ int main(void) {
             &keyboard_capture, &mode_state,
             release_result == PICO_SAFETY_RELEASE_READY, send_pass_report,
             send_record_event, NULL);
+        pico_playback_scheduler_task(&playback_scheduler);
         pico_uart_transport_tx_task(&uart_transport);
 #if PICO_HID_DEMO_TEST
         if (release_result == PICO_SAFETY_RELEASE_READY) {
             hid_demo_test_task();
         }
 #endif
-        sleep_ms(1u);
+#if PICO_PLAYBACK_SCHED_TEST
+        pico_playback_test_source_task();
+#endif
+        // PLAYING needs sub-millisecond scheduling precision, so it busy-polls
+        // instead of sleeping; every other state keeps the previous 1 ms
+        // sleep. This trades 100% CPU usage during playback for the <1 ms
+        // lateness target (see docs/realtime-design.md).
+        if (pico_mode_state_get(&mode_state) == PICO_UART_MODE_PLAYING) {
+            tight_loop_contents();
+        } else {
+            sleep_ms(1u);
+        }
     }
 }
 

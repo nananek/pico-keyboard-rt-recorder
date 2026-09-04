@@ -91,6 +91,7 @@ bool pico_uart_type_known(uint8_t type) {
         case PICO_UART_ERROR:
         case PICO_UART_PONG:
         case PICO_UART_MODE_CHANGED:
+        case PICO_UART_PLAY_METRICS:
         case PICO_UART_QUEUE_CLEAR:
         case PICO_UART_QUEUE_EVENT:
         case PICO_UART_QUEUE_END:
@@ -132,6 +133,11 @@ bool pico_uart_frame_payload_valid(const pico_uart_frame_t *frame) {
             return frame->payload_len == 5u;
         case PICO_UART_PLAY_UNDERRUN:
             return frame->payload_len == 10u;
+        case PICO_UART_PLAY_METRICS:
+            // dispatched_count u32, underrun_count u32, min/max_lateness_us
+            // i32, sum_lateness_us i64, p95/p99_lateness_us i32,
+            // samples_truncated u8.
+            return frame->payload_len == 33u;
         default:
             return frame->payload_len == 0u;
     }
