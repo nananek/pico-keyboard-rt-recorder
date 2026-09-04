@@ -31,6 +31,9 @@ ERROR = 0x09
 PONG = 0x0A
 MODE_CHANGED = 0x0B
 
+QUEUE_CLEAR = 0x80
+QUEUE_EVENT = 0x81
+QUEUE_END = 0x82
 MODE_SET = 0x87
 
 PICO_TO_ZERO_TYPES = frozenset(range(RECORD_EVENT, MODE_CHANGED + 1))
@@ -73,6 +76,30 @@ def encode_frame(message_type: int, payload: bytes = b"") -> bytes:
         raise ProtocolError(f"frame payload exceeds {MAX_PAYLOAD} bytes")
     covered = bytes((VERSION, message_type)) + struct.pack("<H", len(payload)) + payload
     return bytes((MAGIC,)) + covered + struct.pack("<H", crc16_ccitt_false(covered))
+
+
+def encode_queue_clear() -> bytes:
+    """Encode QUEUE_CLEAR, discarding the Pico playback queue. Valid in ARMED."""
+    return encode_frame(QUEUE_CLEAR)
+
+
+def encode_queue_event(offset_us: int, report: bytes) -> bytes:
+    """Encode one QUEUE_EVENT: an absolute Pico-epoch offset plus its report.
+
+    Mirrors RECORD_EVENT's wire shape (offset_us u64 LE, report_len u8 (8),
+    then the report) but travels Zero -> Pico.
+    """
+    if type(offset_us) is not int or not 0 <= offset_us <= 0xFFFFFFFFFFFFFFFF:
+        raise ProtocolError("QUEUE_EVENT offset_us must be an integer in 0..2**64-1")
+    if not isinstance(report, (bytes, bytearray)) or len(report) != 8:
+        raise ProtocolError("QUEUE_EVENT report must be exactly 8 bytes")
+    payload = struct.pack("<QB", offset_us, 8) + bytes(report)
+    return encode_frame(QUEUE_EVENT, payload)
+
+
+def encode_queue_end() -> bytes:
+    """Encode QUEUE_END, marking the loaded sequence complete. Valid in ARMED."""
+    return encode_frame(QUEUE_END)
 
 
 class IncrementalDecoder:
@@ -183,6 +210,18 @@ def validate_pico_status(frame: Frame) -> tuple[int, tuple[bool, bool, bool, boo
     if any(flag not in (0, 1) for flag in flags):
         raise ProtocolError("PICO_STATUS flags must be zero or one")
     return state, tuple(bool(flag) for flag in flags)  # type: ignore[return-value]
+
+
+def validate_buffer_status(frame: Frame) -> tuple[int, int, int]:
+    """Validate BUFFER_STATUS and expose (state, queued_count, free_capacity)."""
+    if frame.message_type != BUFFER_STATUS:
+        raise ProtocolError("expected BUFFER_STATUS")
+    if len(frame.payload) != 5:
+        raise ProtocolError(f"BUFFER_STATUS payload must be 5 bytes, got {len(frame.payload)}")
+    state, queued_count, free_capacity = struct.unpack("<BHH", frame.payload)
+    if state not in VALID_MODES:
+        raise ProtocolError(f"BUFFER_STATUS has invalid state {state}")
+    return state, queued_count, free_capacity
 
 
 def pico_payload_is_valid(message_type: int, payload: bytes) -> bool:

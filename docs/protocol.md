@@ -72,12 +72,24 @@ returns `MODE_CHANGED(current_state, INVALID_TARGET)`.
   input and recovers only with a CRC-checked `MODE_SET(PASS)`. A fault in PASS
   leaves physical input intact and reports the fault reason without entering
   ERROR.
+- `QUEUE_CLEAR`, `QUEUE_EVENT`, and `QUEUE_END` load the fixed-capacity Pico
+  playback queue and are valid only in ARMED; receiving any of them outside
+  ARMED is a protocol error, same as any other unexpected command. Each
+  accepted queue command replies with `BUFFER_STATUS`. `QUEUE_CLEAR` discards
+  every currently queued event. `QUEUE_EVENT` enqueues one event, or is a
+  protocol error if the queue is already full: Zero must stay within the
+  `free_capacity` last advertised by `BUFFER_STATUS`. `QUEUE_END` additionally
+  replies `PLAY_READY` once, signalling Zero may send `PLAY_START`. Unlike
+  every other state change, `PLAY_START` does not clear the queue it is about
+  to consume; only `PLAY_ABORT`, a transition to PASS, or a fault entering
+  ERROR clears it.
 
 | Action | Valid current state | Result |
 | --- | --- | --- |
 | `MODE_SET(PASS)` | Any | PASS; only a non-PASS source state clears input and releases keys. |
 | `MODE_SET(RECORD)` | PASS, RECORD | RECORD |
 | `MODE_SET(ARMED)` | PASS, ARMED | ARMED |
+| `QUEUE_CLEAR` / `QUEUE_EVENT` / `QUEUE_END` | ARMED | Modifies the playback queue; replies `BUFFER_STATUS` (`QUEUE_END` also replies `PLAY_READY`) |
 | `PLAY_START` | ARMED | PLAYING |
 | `PLAY_ABORT` | ARMED, PLAYING | ARMED with reason `ABORTED` |
 
@@ -85,8 +97,11 @@ returns `MODE_CHANGED(current_state, INVALID_TARGET)`.
 `QUEUE_EVENT` is `offset_us u64 LE`, `report_len u8` (8), then the report;
 offsets are absolute from the Pico playback epoch. `MODE_CHANGED` is
 `state u8, reason u8`. `PICO_STATUS` is `state u8` followed by four fault
-flags (RX overflow, hardware error, invalid frame, TX drop). PING/PONG have no
-payload. Queue/playback payloads retain their version-1 layouts where used.
+flags (RX overflow, hardware error, invalid frame, TX drop). `BUFFER_STATUS`
+is `state u8`, `queued_count u16 LE`, `free_capacity u16 LE`; both counts are
+queue slots, not bytes. `PLAY_READY` has no payload. PING/PONG have no
+payload. `PLAY_STARTED`, `PLAY_FINISHED`, `PLAY_ABORTED`, and `PLAY_UNDERRUN`
+are reserved for the playback scheduler and unused until it is implemented.
 If the bounded TX ring is full, Pico drops the whole outgoing frame and latches
 the TX-drop status flag; it never blocks the host callback or a state
 transition. `RECORD_EVENT` loss is observable through that flag. A Zero that

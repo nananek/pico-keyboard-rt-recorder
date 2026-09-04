@@ -36,3 +36,14 @@ Playback remains an absolute-deadline feature: `PLAY_START` samples a Pico
 epoch and future `QUEUE_EVENT` offsets are scheduled against that epoch. A
 Zero sleep, UART write time, or chained delay must not determine HID output.
 Playback alarm work must hand off USB calls to a safe Pico context when needed.
+
+The playback queue itself is a fixed-capacity ring buffer, filled only while
+ARMED. `QUEUE_CLEAR`/`QUEUE_EVENT`/`QUEUE_END` each reply with `BUFFER_STATUS`
+(state plus queued/free slot counts) so Zero can pace `QUEUE_EVENT` sends
+against Pico-advertised capacity instead of a fixed window; a `QUEUE_EVENT`
+that arrives once the queue is full is treated as a protocol violation, not a
+silent drop. `QUEUE_END` additionally emits `PLAY_READY` once, and `PLAY_START`
+deliberately leaves the queue intact — only `PLAY_ABORT`, a transition to
+PASS, or a fault entering ERROR discards queued playback events, mirroring how
+those same transitions discard queued physical reports. Draining the queue
+against the playback epoch is the scheduler's job and is not yet implemented.

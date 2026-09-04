@@ -15,6 +15,12 @@ typedef void (*pico_mode_changed_callback_t)(
 typedef struct {
     pico_mode_simple_callback_t all_release;
     pico_mode_simple_callback_t clear_physical;
+    // Invoked wherever a session boundary discards queued playback data:
+    // entering PASS from a non-PASS state, entering RECORD/ARMED from PASS,
+    // PLAY_ABORT, and any fault that enters ERROR. It is deliberately NOT
+    // invoked by PLAY_START, which must leave the just-loaded queue intact
+    // for the (future) scheduler to drain.
+    pico_mode_simple_callback_t clear_queue;
     pico_mode_changed_callback_t mode_changed;
     void *user;
 } pico_mode_state_callbacks_t;

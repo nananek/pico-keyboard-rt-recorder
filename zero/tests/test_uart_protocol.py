@@ -3,16 +3,25 @@ import unittest
 
 from app.errors import ProtocolError
 from app.uart_protocol import (
+    BUFFER_STATUS,
     MAGIC,
+    MODE_ARMED,
     MODE_CHANGED,
     MODE_PASS,
     MODE_SET,
+    QUEUE_CLEAR,
+    QUEUE_END,
+    QUEUE_EVENT,
     RECORD_EVENT,
     VERSION,
     Frame,
     IncrementalDecoder,
     crc16_ccitt_false,
     encode_frame,
+    encode_queue_clear,
+    encode_queue_end,
+    encode_queue_event,
+    validate_buffer_status,
     validate_record_event,
 )
 
@@ -75,6 +84,42 @@ class UartProtocolTests(unittest.TestCase):
         decoder = IncrementalDecoder()
         decoder.feed(pico_frame(MODE_CHANGED, b"\x01"))
         self.assertIn("invalid payload", decoder.pop_errors()[0])
+
+    def test_encode_queue_clear_and_end_have_no_payload(self):
+        for encoder, message_type in ((encode_queue_clear, QUEUE_CLEAR), (encode_queue_end, QUEUE_END)):
+            frame = encoder()
+            self.assertEqual(frame[:5], bytes((MAGIC, VERSION, message_type, 0, 0)))
+            self.assertEqual(len(frame), 7)
+            self.assertEqual(struct.unpack("<H", frame[-2:])[0], crc16_ccitt_false(frame[1:-2]))
+
+    def test_encode_queue_event_matches_record_event_wire_shape(self):
+        report = bytes(range(8))
+        frame = encode_queue_event(0x1122334455667788, report)
+        self.assertEqual(frame[:3], bytes((MAGIC, VERSION, QUEUE_EVENT)))
+        self.assertEqual(struct.unpack("<H", frame[3:5])[0], 17)
+        payload = frame[5:22]
+        self.assertEqual(payload, struct.pack("<QB8s", 0x1122334455667788, 8, report))
+        with self.assertRaises(ProtocolError):
+            encode_queue_event(0, b"\0" * 7)
+
+    def test_encode_queue_event_rejects_out_of_range_offset(self):
+        report = bytes(range(8))
+        with self.assertRaisesRegex(ProtocolError, "offset_us"):
+            encode_queue_event(-1, report)
+        with self.assertRaisesRegex(ProtocolError, "offset_us"):
+            encode_queue_event(2**64, report)
+        with self.assertRaisesRegex(ProtocolError, "offset_us"):
+            encode_queue_event(1.5, report)
+
+    def test_validate_buffer_status_round_trip_and_rejections(self):
+        payload = struct.pack("<BHH", MODE_ARMED, 3, 509)
+        self.assertEqual(validate_buffer_status(Frame(BUFFER_STATUS, payload)), (MODE_ARMED, 3, 509))
+        with self.assertRaises(ProtocolError):
+            validate_buffer_status(Frame(MODE_CHANGED, payload))
+        with self.assertRaises(ProtocolError):
+            validate_buffer_status(Frame(BUFFER_STATUS, payload[:-1]))
+        with self.assertRaises(ProtocolError):
+            validate_buffer_status(Frame(BUFFER_STATUS, struct.pack("<BHH", 99, 0, 0)))
 
 
 if __name__ == "__main__":
