@@ -7,7 +7,7 @@ The following work items are created as GitHub Issues. They are intentionally or
 | 0 | Foundation and design baseline | Project docs, contributor constraints, repository scaffold, and issue roadmap are committed. |
 | 1 | Pico USB HID keyboard device | A PC enumerates Pico as a keyboard and accepts a fixed release/key report. |
 | 2 | Pico PIO USB host and capture | Boot Keyboard reports are received and stamped with Pico hardware time. |
-| 3 | Pico pass-through and UART record mirror | PASS forwards physical reports; RECORD emits Pico-timestamped version-2 `RECORD_EVENT` frames. |
+| 3 | Pico pass-through and UART record mirror | PASS and RECORD both forward physical reports to the PC; RECORD also emits Pico-timestamped version-2 `RECORD_EVENT` frames, sent exactly once per report regardless of HID busy/retry state. |
 | 4 | UART mode control and safety | UART0 RX ring, main-loop version/CRC parser, `MODE_SET`, `MODE_CHANGED`, and all-release transitions are verified. |
 | 5 | Zero recorder CLI and persistence | Capture sessions persist valid recordings with list/dump operations. |
 | 6 | Pico playback queue protocol | Queue commands/status and queue tests operate correctly on the version-2 transport from Phase 4. |

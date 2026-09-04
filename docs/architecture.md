@@ -15,8 +15,8 @@ The only control link is framed binary UART0 (Pico GP0 TX / GP1 RX, 460800
 ```text
 USB keyboard -> PIO-USB host -> host callback timestamp
                                   |-> bounded physical queue
-                                  |       |-> PASS: native HID device -> PC
-                                  |       `-> RECORD: RECORD_EVENT -> UART -> Zero
+                                  |       |-> PASS or RECORD: native HID device -> PC
+                                  |       `-> RECORD only: RECORD_EVENT -> UART -> Zero
 Zero UART MODE_SET/PLAY_* -> RX IRQ -> byte ring -> main parser -> state/queue
 ```
 
@@ -28,8 +28,11 @@ loop when UART space is available.
 
 ## Safety
 
-PASS forwards physical reports. RECORD captures reports and does not forward
-them. ARMED and PLAYING block physical input. Entering PASS from a non-PASS
+PASS and RECORD both forward physical reports to the PC via HID, retrying
+against a busy endpoint until it accepts. RECORD additionally captures each
+report and sends it to Zero as `RECORD_EVENT`, sent exactly once per report
+and unaffected by HID busy/retry state. ARMED and PLAYING block physical
+input. Entering PASS from a non-PASS
 state cancels stale physical data, sends all-keys-release, and waits for a
 fresh host report; repeated PASS commands preserve current physical input.
 Malformed frames, ring overflow, and UART hardware errors enter ERROR outside

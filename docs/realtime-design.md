@@ -32,18 +32,27 @@ safe because `MODE_SET` is idempotent and the Zero retries it if its
 `MODE_CHANGED` acknowledgement is absent.
 
 Physical reports are timestamped with `time_us_64()` at the TinyUSB host
-callback. In PASS they are forwarded to the native HID device; in RECORD they
-become `RECORD_EVENT` frames carrying that Pico timestamp; in ARMED/PLAYING or
-ERROR they are discarded. A successful state change, abort, or a fault that
-enters ERROR clears queued physical reports and sends an all-zero release report;
-idempotent `MODE_SET(PASS)` retransmission and faults received in PASS do
-neither. If the HID endpoint is temporarily busy, the release is retried before
-any later physical report is forwarded. The loop that successfully submits a
-release does not drain PASS input, because that submission consumes HID endpoint
-readiness; later PASS reports remain queued until a following loop accepts them.
-If submission fails they likewise remain queued for retry. RECORD drains its
-capture FIFO to UART independently of native HID readiness. UART event arrival
-is never a timing source.
+callback. In both PASS and RECORD they are forwarded to the native HID device
+from the same FIFO head, retried against a busy endpoint until it accepts, so
+the device keeps working as a normal keyboard whether or not a recording is
+running; in ARMED/PLAYING or ERROR they are discarded. RECORD additionally
+emits one `RECORD_EVENT` frame carrying that Pico timestamp for each head --
+sent the moment the head is first peeked, before that iteration's HID outcome
+is known, so recording never waits on or is gated by HID readiness. A single
+`read_index` cursor still drives both sinks: a `head_recorded` flag on the FIFO
+tracks whether the current head's `RECORD_EVENT` has already gone out, so a
+head retried multiple times against a busy HID endpoint still produces exactly
+one `RECORD_EVENT`, and popping the head (only once HID accepts it) resets the
+flag for the next one. A successful state change, abort, or a fault that
+enters ERROR clears queued physical reports (and that flag) and sends an
+all-zero release report; idempotent `MODE_SET(PASS)` retransmission and faults
+received in PASS do neither. If the HID endpoint is temporarily busy, the
+release is retried before any later physical report is forwarded. The loop
+that successfully submits a release does not drain PASS/RECORD input, because
+that submission consumes HID endpoint readiness; later reports remain queued
+until a following loop accepts them. If submission fails they likewise remain
+queued for retry, and in RECORD the already-sent `RECORD_EVENT` for that
+queued head is never resent. UART event arrival is never a timing source.
 
 Playback is an absolute-deadline feature: `PLAY_START` samples a Pico epoch
 with `time_us_64()` once and hands that same value to both the scheduler
