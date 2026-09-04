@@ -46,5 +46,9 @@ bool pico_mode_state_play_abort(pico_mode_state_t *mode);
 bool pico_mode_state_play_finish(pico_mode_state_t *mode);
 void pico_mode_state_protocol_error(pico_mode_state_t *mode);
 void pico_mode_state_uart_fault(pico_mode_state_t *mode);
+// Persistent playback underrun watchdog (Issue #10): same ERROR-entry
+// behavior as pico_mode_state_uart_fault, but reports
+// PICO_UART_REASON_UNDERRUN.
+void pico_mode_state_underrun_fault(pico_mode_state_t *mode);
 
 #endif

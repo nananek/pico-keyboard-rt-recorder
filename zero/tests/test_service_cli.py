@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 from pathlib import Path
 import struct
 import sys
@@ -23,6 +24,7 @@ from app.uart_protocol import (
     MODE_ERROR,
     MODE_PASS,
     MODE_RECORD,
+    MODE_SET,
     PICO_STATUS,
     PLAY_READY,
     PLAY_FINISHED,
@@ -268,6 +270,28 @@ class ServiceAndCliTests(unittest.TestCase):
             self.assertFalse(RecordingStore(directory).exists("hello"))
         self.assertEqual(len(stream.writes), 2)
 
+    def test_uart_stall_during_recording_does_not_publish_and_still_attempts_pass(self):
+        # Only the RECORD acknowledgement is canned; once exhausted,
+        # FakeStream.read() returns no data forever, simulating a UART link
+        # that has stopped responding mid-recording (as opposed to the
+        # disconnect test above, where the stream raises OSError).
+        stream = FakeStream([mode_changed(MODE_RECORD)])
+        with tempfile.TemporaryDirectory() as directory:
+            session = RecordingSession(
+                PicoTransport(stream), RecordingStore(directory), "hello", mode_timeout=0.001
+            )
+            session.start()
+            with self.assertRaises(TransportTimeout):
+                session.receive_and_consume(timeout=0.001)
+            # The stalled link also cannot confirm the best-effort PASS
+            # recovery below (no MODE_CHANGED ever arrives), so abort()
+            # reports that failure rather than silently swallowing it --
+            # but it still attempts the MODE_SET(PASS) write.
+            result = session.abort()
+            self.assertIsInstance(result, TransportTimeout)
+            self.assertFalse(RecordingStore(directory).exists("hello"))
+        self.assertEqual([write[2] for write in stream.writes], [MODE_SET, MODE_SET, MODE_SET])
+
     def test_pico_receive_overflow_status_does_not_publish(self):
         stream = FakeStream([mode_changed(MODE_RECORD), pico_frame(PICO_STATUS, bytes((MODE_RECORD, 1, 0, 0, 0))), mode_changed(MODE_PASS)])
         with tempfile.TemporaryDirectory() as directory:
@@ -347,6 +371,53 @@ class ServiceAndCliTests(unittest.TestCase):
         self.assertIn('"outcome":"finished"', stdout.getvalue())
         self.assertIn(PLAY_START, [write[2] for write in stream.writes])
         self.assertTrue(stream.closed)
+
+    def test_cli_play_metrics_out_appends_one_jsonl_line(self):
+        metrics = struct.pack("<IIiiqiiB", 1, 0, 0, 0, 0, 0, 0, 0)
+        stream = FakeStream(
+            [
+                mode_changed(MODE_ARMED),
+                buffer_status(MODE_ARMED, 0, 512),
+                buffer_status(MODE_ARMED, 1, 511),
+                pico_frame(PLAY_READY),
+                buffer_status(MODE_ARMED, 1, 511),
+                mode_changed(3)
+                + pico_frame(PLAY_STARTED, struct.pack("<Q", 1234))
+                + pico_frame(PLAY_FINISHED)
+                + pico_frame(PLAY_METRICS, metrics)
+                + mode_changed(MODE_ARMED, 7),
+                mode_changed(MODE_PASS),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            RecordingStore(directory).save(
+                Recording("hello", 0, (RecordingEvent(0, (0,) * 8),))
+            )
+            metrics_out = Path(directory) / "metrics.jsonl"
+            with patch(
+                "app.cli._open_transport",
+                return_value=(PicoTransport(stream), stream),
+            ):
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    status = cli.main(
+                        [
+                            "--recordings-dir",
+                            directory,
+                            "play",
+                            "hello",
+                            "--device",
+                            "fake",
+                            "--metrics-out",
+                            str(metrics_out),
+                        ]
+                    )
+            self.assertEqual(status, 0)
+            lines = metrics_out.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 1)
+            entry = json.loads(lines[0])
+            self.assertEqual(entry["outcome"], "finished")
+            self.assertEqual(entry["metrics"]["dispatched_count"], 1)
 
     def test_cli_play_closes_serial_when_options_are_invalid(self):
         stream = FakeStream([])

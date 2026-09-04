@@ -408,6 +408,25 @@ int main(void) {
             playback_flow_control_fault = false;
             pico_mode_state_protocol_error(&mode_state);
         }
+        // Reliability watchdog (Issue #10), scoped to PLAYING only per that
+        // issue's acceptance criteria ("during playback"): a persistent
+        // underrun means this run can no longer be trusted to complete
+        // safely, so force ERROR (release all keys, discard the queue, block
+        // input until a CRC-checked MODE_SET(PASS)) rather than let it stall
+        // indefinitely. This is keyed off the scheduler's own queue state,
+        // not raw UART receive activity, because Zero's credit-based feeder
+        // legitimately goes silent for long stretches whenever it has
+        // already queued everything the Pico's buffer can currently hold
+        // (see docs/realtime-design.md); a dead link only becomes an actual
+        // problem once the queue needs refilling and does not get it, which
+        // is exactly this condition. A genuine transport-level fault is
+        // separately and unconditionally caught by the
+        // pico_uart_transport_take_fault check above, in any mode.
+        if (pico_mode_state_get(&mode_state) == PICO_UART_MODE_PLAYING &&
+            pico_playback_scheduler_watchdog_expired(
+                &playback_scheduler, time_us_64())) {
+            pico_mode_state_underrun_fault(&mode_state);
+        }
         pico_uart_transport_tx_task(&uart_transport);
 #if PICO_HID_DEMO_TEST
         if (release_result == PICO_SAFETY_RELEASE_READY) {

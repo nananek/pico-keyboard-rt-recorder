@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.errors import RecorderError
+from app.errors import ProtocolError, RecorderError, TransportTimeout
 from app.playback import PlaybackSession, expand_offsets
 from app.recording import Recording, RecordingEvent
 from app.transport import PicoTransport
@@ -38,6 +38,14 @@ from app.uart_protocol import (
 def pico_frame(message_type, payload=b""):
     covered = bytes((VERSION, message_type)) + struct.pack("<H", len(payload)) + payload
     return bytes((MAGIC,)) + covered + struct.pack("<H", crc16_ccitt_false(covered))
+
+
+def mode_changed(state, reason=0):
+    return pico_frame(MODE_CHANGED, bytes((state, reason)))
+
+
+def buffer_status(state, queued_count, free_capacity):
+    return pico_frame(BUFFER_STATUS, struct.pack("<BHH", state, queued_count, free_capacity))
 
 
 def recording_from_deltas(deltas):
@@ -158,6 +166,61 @@ class PlaybackPicoStream:
         self.closed = True
 
 
+class FakeStream:
+    """Minimal byte stream fake: pops one canned read per call.
+
+    A `BaseException` entry is raised instead of returned, letting a test
+    simulate a UART disconnect (`OSError`) at a specific point in the frame
+    sequence. Once `reads` is exhausted, `read` returns no data, matching a
+    real serial device that has nothing more to deliver.
+    """
+
+    def __init__(self, reads):
+        self.reads = list(reads)
+        self.writes = []
+        self.closed = False
+
+    def read(self, _size=1):
+        if not self.reads:
+            return b""
+        next_read = self.reads.pop(0)
+        if isinstance(next_read, BaseException):
+            raise next_read
+        return next_read
+
+    def write(self, data):
+        self.writes.append(data)
+        return len(data)
+
+    def close(self):
+        self.closed = True
+
+
+class ManualClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+class StalledStream(FakeStream):
+    """Like FakeStream, but advances `clock` on every empty read once its
+    canned reads are exhausted -- simulating a UART link that never produces
+    another byte, without a test actually blocking on real wall-clock time.
+    """
+
+    def __init__(self, reads, clock):
+        super().__init__(reads)
+        self.clock = clock
+
+    def read(self, _size=1):
+        if self.reads:
+            return self.reads.pop(0)
+        self.clock.now += 1.0
+        return b""
+
+
 class PlaybackTests(unittest.TestCase):
     def test_expand_offsets_and_speed_scaling(self):
         events = recording_from_deltas([0, 100, 300]).events
@@ -245,6 +308,73 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(result.outcome, "aborted")
         self.assertIn(PLAY_ABORT, [frame[2] for frame in stream.writes])
         self.assertEqual(stream.mode, MODE_PASS)
+
+    def test_uart_disconnect_during_playback_attempts_pass_recovery(self):
+        metrics = struct.pack("<IIiiqiiB", 1, 0, 0, 0, 0, 0, 0, 0)
+        stream = FakeStream(
+            [
+                mode_changed(MODE_ARMED),
+                buffer_status(MODE_ARMED, 0, 8),
+                buffer_status(MODE_ARMED, 1, 7),
+                pico_frame(PLAY_READY),
+                buffer_status(MODE_ARMED, 1, 7),
+                mode_changed(MODE_PLAYING),
+                pico_frame(PLAY_STARTED, struct.pack("<Q", 1_000_000)),
+                # The link drops while awaiting PLAY_FINISHED...
+                OSError("disconnected"),
+                # ...but the outcome-aware PLAY_ABORT recovery below still
+                # succeeds once reads resume.
+                pico_frame(PLAY_ABORTED),
+                pico_frame(PLAY_METRICS, metrics),
+                mode_changed(MODE_ARMED, REASON_ABORTED),
+                mode_changed(MODE_PASS),
+            ]
+        )
+        session = PlaybackSession(PicoTransport(stream), recording_from_deltas([0]))
+        session.start()
+
+        with self.assertRaisesRegex(ProtocolError, "could not read"):
+            session.finish()
+
+        self.assertIsNone(session.abort_best_effort())
+        self.assertIn(PLAY_ABORT, [w[2] for w in stream.writes])
+        self.assertEqual([w[2] for w in stream.writes][-1], MODE_SET)
+
+    def test_uart_stall_during_playback_attempts_pass_and_reports_timeout(self):
+        clock = ManualClock()
+        stream = StalledStream(
+            [
+                mode_changed(MODE_ARMED),
+                buffer_status(MODE_ARMED, 0, 8),
+                buffer_status(MODE_ARMED, 1, 7),
+                pico_frame(PLAY_READY),
+                buffer_status(MODE_ARMED, 1, 7),
+                mode_changed(MODE_PLAYING),
+                pico_frame(PLAY_STARTED, struct.pack("<Q", 1_000_000)),
+            ],
+            clock,
+        )
+        session = PlaybackSession(
+            PicoTransport(stream, clock=clock),
+            recording_from_deltas([0]),
+            mode_timeout=0.001,
+            playback_timeout=5.0,
+        )
+        session.start()
+        self.assertEqual(clock.now, 0.0)
+
+        with self.assertRaises(TransportTimeout):
+            session.finish()
+
+        # A link that never produces another byte cannot confirm recovery
+        # either; abort_best_effort() still tries PLAY_ABORT and MODE_SET
+        # (PASS) and reports the failure instead of hanging or raising past
+        # the caller.
+        result = session.abort_best_effort()
+
+        self.assertIsInstance(result, Exception)
+        self.assertIn(PLAY_ABORT, [w[2] for w in stream.writes])
+        self.assertIn(MODE_SET, [w[2] for w in stream.writes])
 
     def test_prebuffer_density_beyond_capacity_fails_before_play_start(self):
         stream = PlaybackPicoStream(capacity=2)

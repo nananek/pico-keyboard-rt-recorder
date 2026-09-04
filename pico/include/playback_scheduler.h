@@ -17,6 +17,15 @@ enum {
     // prefix backs the end-of-run percentile calculation, and
     // samples_truncated records when that happened.
     PICO_PLAYBACK_SCHEDULER_MAX_SAMPLES = 2048u,
+
+    // How long a persistent underrun (queue empty, sequence not yet ended)
+    // may continue before the main loop treats it as a stall rather than
+    // ordinary streaming-refill jitter and forces ERROR (Issue #10). Chosen
+    // to match the Pi Zero side's existing 2.0-second PlaybackSession
+    // mode_timeout default (zero/app/playback.py) and to comfortably exceed
+    // normal streaming-refill jitter over UART while still bounding an
+    // actually-stalled run within a reasonable safety margin.
+    PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US = 2000000u,
 };
 
 // Fixed-size RT metrics for one playback run, reported once in the
@@ -81,6 +90,11 @@ typedef struct {
     bool underrun_active;
     uint64_t playback_start_us;
     uint64_t next_deadline_us;
+    // time_us_64() at the leading edge of the current underrun interval
+    // (when underrun_active transitioned to true). Only meaningful while
+    // underrun_active is true; used by pico_playback_scheduler_watchdog_expired
+    // to detect a persistent (not merely transient) underrun.
+    uint64_t underrun_since_us;
 
     // ISR<->main-loop handoff. The alarm callback runs in interrupt context
     // and must not call TinyUSB; it only records that a deadline elapsed.
@@ -143,5 +157,14 @@ void pico_playback_scheduler_task(pico_playback_scheduler_t *scheduler);
 
 bool pico_playback_scheduler_is_running(
     const pico_playback_scheduler_t *scheduler);
+
+// True iff the scheduler has been continuously underrun (queue empty,
+// sequence not yet ended) for at least
+// PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US, i.e. a persistent underrun
+// rather than the transient kind begin_underrun()/arm_next() already recover
+// from automatically. Pure query: does not itself change scheduler state.
+// NULL-safe.
+bool pico_playback_scheduler_watchdog_expired(
+    const pico_playback_scheduler_t *scheduler, uint64_t now_us);
 
 #endif  // PICO_KEYBOARD_RT_PLAYBACK_SCHEDULER_H

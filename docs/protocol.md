@@ -55,6 +55,18 @@ UNDERRUN=6, FINISHED=7. A CRC-valid `MODE_SET` with an unsupported target is a r
 command, not a malformed frame: it leaves the current state unchanged and
 returns `MODE_CHANGED(current_state, INVALID_TARGET)`.
 
+`UNDERRUN` as a `MODE_CHANGED` reason (as opposed to the unrelated
+`PLAY_UNDERRUN` message type, described below) means the persistent-underrun
+watchdog fired: an open PLAYING sequence's queue stayed empty continuously
+for at least `PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US` (2 seconds,
+`pico/include/playback_scheduler.h`), so Pico gave up waiting for streamed
+refill and entered ERROR -- releasing keys, discarding the queue, and
+blocking input until a CRC-checked `MODE_SET(PASS)`. This is distinct from
+the *transient* underrun below (`PLAY_UNDERRUN`, `underrun_count`), which
+stays PLAYING indefinitely as long as the sequence is still open; the
+watchdog is what turns a stall that never recovers into a safe stop instead
+of hanging forever.
+
 ## Mode semantics and payloads
 
 - PASS forwards each physical Boot Keyboard report to the PC and emits no

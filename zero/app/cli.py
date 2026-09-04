@@ -41,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="whole-run timeout in seconds (default: scaled duration plus margin)",
     )
+    play.add_argument(
+        "--metrics-out",
+        type=Path,
+        default=None,
+        help="append this run's PLAY_METRICS (JSON Lines) to PATH, for tools/jitter_report.py",
+    )
     _add_serial_options(play)
 
     subcommands.add_parser("list", help="list valid saved recordings")
@@ -62,6 +68,19 @@ def _json_stdout(value: object) -> None:
 def _json_error(error: Exception, code: int) -> int:
     print(json.dumps({"ok": False, "error": str(error), "code": code}, separators=(",", ":")), file=sys.stderr)
     return code
+
+
+def _append_metrics_jsonl(path: Path | None, value: object) -> None:
+    """Append one playback result as a JSON Line, for tools/jitter_report.py.
+
+    A no-op when metrics_out was not requested or the run produced no result
+    (e.g. an abort before PLAY_START).
+    """
+    if path is None or value is None:
+        return
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(value, separators=(",", ":"), ensure_ascii=False, sort_keys=True))
+        handle.write("\n")
 
 
 def _open_transport(device: str, baud: int) -> tuple[PicoTransport, object]:
@@ -137,6 +156,7 @@ def _run_play(args: argparse.Namespace) -> int:
         result = session.play(return_to_pass=True)
         completed = True
         value = asdict(result)
+        _append_metrics_jsonl(args.metrics_out, value)
         _json_stdout({"ok": True, "playback": value})
         return 0
     except KeyboardInterrupt:
@@ -146,6 +166,7 @@ def _run_play(args: argparse.Namespace) -> int:
             return _json_error(error, 4)
         completed = True
         value = None if result is None else asdict(result)
+        _append_metrics_jsonl(args.metrics_out, value)
         _json_stdout({"ok": True, "playback": value})
         return 0
     except Exception as error:

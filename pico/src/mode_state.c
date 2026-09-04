@@ -147,3 +147,7 @@ void pico_mode_state_protocol_error(pico_mode_state_t *mode) {
 void pico_mode_state_uart_fault(pico_mode_state_t *mode) {
     enter_error(mode, PICO_UART_REASON_UART_FAULT);
 }
+
+void pico_mode_state_underrun_fault(pico_mode_state_t *mode) {
+    enter_error(mode, PICO_UART_REASON_UNDERRUN);
+}
