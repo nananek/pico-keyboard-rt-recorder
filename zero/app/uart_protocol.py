@@ -89,6 +89,8 @@ def encode_queue_event(offset_us: int, report: bytes) -> bytes:
     Mirrors RECORD_EVENT's wire shape (offset_us u64 LE, report_len u8 (8),
     then the report) but travels Zero -> Pico.
     """
+    if type(offset_us) is not int or not 0 <= offset_us <= 0xFFFFFFFFFFFFFFFF:
+        raise ProtocolError("QUEUE_EVENT offset_us must be an integer in 0..2**64-1")
     if not isinstance(report, (bytes, bytearray)) or len(report) != 8:
         raise ProtocolError("QUEUE_EVENT report must be exactly 8 bytes")
     payload = struct.pack("<QB", offset_us, 8) + bytes(report)

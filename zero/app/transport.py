@@ -53,55 +53,56 @@ class PicoTransport:
             raise ProtocolError("MODE_SET retries must not be negative")
         for attempt in range(retries + 1):
             self._write(encode_frame(MODE_SET, bytes((target_mode,))))
-            deadline = self.clock() + timeout
-            deferred: list[Frame] = []
             try:
-                while True:
-                    remaining = deadline - self.clock()
-                    if remaining <= 0:
-                        raise TransportTimeout(f"timed out waiting for MODE_CHANGED({target_mode})")
-                    frame = self.require_not_error(self.receive_frame(timeout=remaining))
-                    if frame.message_type != MODE_CHANGED:
-                        # Events can precede the acknowledgement in the same serial read.
-                        # Retain them for the recording session without repeatedly reading
-                        # the same queued frame while awaiting MODE_CHANGED.
-                        deferred.append(frame)
-                        continue
-                    state, reason = validate_mode_changed(frame)
-                    if state == target_mode and reason == REASON_OK:
-                        return
-                    raise ModeRejected(f"Pico rejected MODE_SET({target_mode}): state={state}, reason={reason}")
+                frame = self._await(MODE_CHANGED, timeout=timeout)
             except TransportTimeout:
                 if attempt == retries:
                     raise
-            finally:
-                self._pending.extendleft(reversed(deferred))
+                continue
+            state, reason = validate_mode_changed(frame)
+            if state == target_mode and reason == REASON_OK:
+                return
+            raise ModeRejected(f"Pico rejected MODE_SET({target_mode}): state={state}, reason={reason}")
 
     def queue_events(self, events: Iterable[tuple[int, bytes]], *, timeout: float) -> None:
         """Load the Pico playback queue, respecting Pico-advertised capacity.
 
         Sends QUEUE_CLEAR, then one QUEUE_EVENT per (offset_us, report) pair
         while staying within the free_capacity most recently reported by
-        BUFFER_STATUS, then QUEUE_END and waits for PLAY_READY. Valid only
-        while Pico is ARMED. This does not prebuffer or stream events during
-        PLAYING -- that is the Zero playback feeder (a later phase).
+        BUFFER_STATUS, then QUEUE_END and waits for PLAY_READY followed by
+        the BUFFER_STATUS Pico always sends right after it -- both are
+        consumed here so neither leaks into a later call's pending frames.
+        Valid only while Pico is ARMED. This does not prebuffer or stream
+        events during PLAYING -- that is the Zero playback feeder (a later
+        phase). timeout bounds the whole call, not each individual wait.
         """
+        events = tuple(events)
+        deadline = self.clock() + timeout
+
+        def remaining() -> float:
+            left = deadline - self.clock()
+            if left <= 0:
+                raise TransportTimeout("timed out loading the Pico playback queue")
+            return left
+
         self._write(encode_queue_clear())
-        _, _, free_capacity = validate_buffer_status(self._await(BUFFER_STATUS, timeout=timeout))
+        _, _, free_capacity = validate_buffer_status(self._await(BUFFER_STATUS, timeout=remaining()))
         for offset_us, report in events:
             if free_capacity <= 0:
                 raise ProtocolError("Pico playback queue is full; cannot queue more events")
             self._write(encode_queue_event(offset_us, report))
-            _, _, free_capacity = validate_buffer_status(self._await(BUFFER_STATUS, timeout=timeout))
+            _, _, free_capacity = validate_buffer_status(self._await(BUFFER_STATUS, timeout=remaining()))
         self._write(encode_queue_end())
-        self._await(PLAY_READY, timeout=timeout)
+        self._await(PLAY_READY, timeout=remaining())
+        validate_buffer_status(self._await(BUFFER_STATUS, timeout=remaining()))
 
     def _await(self, message_type: int, *, timeout: float) -> Frame:
         """Wait for a specific message type, deferring any other frames.
 
-        Mirrors set_mode's wait loop: frames of a different type (e.g. a
-        RECORD_EVENT interleaved with a queue-loading exchange) are retained
-        in arrival order for later callers instead of being discarded.
+        Used by both set_mode and queue_events: frames of a different type
+        (e.g. a RECORD_EVENT interleaved with a queue-loading exchange) are
+        retained in arrival order for later callers instead of being
+        discarded.
         """
         deadline = self.clock() + timeout
         deferred: list[Frame] = []
@@ -169,4 +170,8 @@ class PicoTransport:
                 if state == MODE_ERROR:
                     details.insert(0, "error_state")
                 raise PicoError(f"Pico status reported {', '.join(details)}")
+        if frame.message_type == MODE_CHANGED:
+            state, reason = validate_mode_changed(frame)
+            if state == MODE_ERROR:
+                raise PicoError(f"Pico entered ERROR state: reason={reason}")
         return frame

@@ -102,6 +102,15 @@ class UartProtocolTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             encode_queue_event(0, b"\0" * 7)
 
+    def test_encode_queue_event_rejects_out_of_range_offset(self):
+        report = bytes(range(8))
+        with self.assertRaisesRegex(ProtocolError, "offset_us"):
+            encode_queue_event(-1, report)
+        with self.assertRaisesRegex(ProtocolError, "offset_us"):
+            encode_queue_event(2**64, report)
+        with self.assertRaisesRegex(ProtocolError, "offset_us"):
+            encode_queue_event(1.5, report)
+
     def test_validate_buffer_status_round_trip_and_rejections(self):
         payload = struct.pack("<BHH", MODE_ARMED, 3, 509)
         self.assertEqual(validate_buffer_status(Frame(BUFFER_STATUS, payload)), (MODE_ARMED, 3, 509))

@@ -39,6 +39,21 @@ static void mode_clear_physical(void *user) {
     pico_keyboard_capture_clear(&keyboard_capture);
 }
 
+static uint64_t read_u64_le(const uint8_t *bytes) {
+    uint64_t value = 0u;
+    for (unsigned i = 0; i < 8u; ++i) {
+        value |= (uint64_t)bytes[i] << (8u * i);
+    }
+    return value;
+}
+
+static void write_u64_le(uint8_t *bytes, uint64_t value) {
+    for (unsigned i = 0; i < 8u; ++i) {
+        bytes[i] = (uint8_t)(value & 0xFFu);
+        value >>= 8;
+    }
+}
+
 static void mode_clear_queue(void *user) {
     (void)user;
     pico_playback_queue_clear(&playback_queue);
@@ -56,11 +71,7 @@ static void send_record_event(
     const pico_keyboard_capture_event_t *event) {
     (void)user;
     uint8_t payload[17];
-    uint64_t timestamp = event->timestamp_us;
-    for (unsigned i = 0; i < 8u; ++i) {
-        payload[i] = (uint8_t)(timestamp & 0xFFu);
-        timestamp >>= 8;
-    }
+    write_u64_le(payload, event->timestamp_us);
     payload[8] = event->report_len;
     memcpy(payload + 9u, &event->report, sizeof(event->report));
     (void)pico_uart_transport_queue_frame(
@@ -88,7 +99,7 @@ static void send_status(void) {
         &uart_transport, PICO_UART_PICO_STATUS, payload, sizeof(payload));
 }
 
-static void send_buffer_status(void) {
+static bool send_buffer_status(void) {
     const uint16_t queued_count =
         (uint16_t)pico_playback_queue_count(&playback_queue);
     const uint16_t free_capacity =
@@ -100,7 +111,7 @@ static void send_buffer_status(void) {
         (uint8_t)(free_capacity & 0xFFu),
         (uint8_t)(free_capacity >> 8),
     };
-    (void)pico_uart_transport_queue_frame(
+    return pico_uart_transport_queue_frame(
         &uart_transport, PICO_UART_BUFFER_STATUS, payload, sizeof(payload));
 }
 
@@ -116,17 +127,19 @@ static void dispatch_queue_command(const pico_uart_frame_t *frame) {
     switch (frame->type) {
         case PICO_UART_QUEUE_CLEAR:
             pico_playback_queue_clear(&playback_queue);
-            send_buffer_status();
+            if (!send_buffer_status()) {
+                /* The TX ring is saturated: Zero will never see this ack.
+                 * Enter ERROR rather than leave Zero waiting on a reply that
+                 * was silently dropped. */
+                pico_mode_state_protocol_error(&mode_state);
+            }
             break;
         case PICO_UART_QUEUE_EVENT: {
             /* offset_us u64 LE, report_len u8 (8), then the 8-byte report:
              * the same 17-byte shape as RECORD_EVENT, mirrored in direction.
              * The transport layer already guarantees this shape (17 bytes,
              * payload[8] == 8) before a command reaches dispatch. */
-            uint64_t offset_us = 0u;
-            for (unsigned i = 0; i < 8u; ++i) {
-                offset_us |= (uint64_t)frame->payload[i] << (8u * i);
-            }
+            const uint64_t offset_us = read_u64_le(frame->payload);
             if (!pico_playback_queue_push(
                     &playback_queue, offset_us, frame->payload + 9u, 8u)) {
                 /* The queue is full: Zero sent beyond the capacity most
@@ -135,15 +148,29 @@ static void dispatch_queue_command(const pico_uart_frame_t *frame) {
                 pico_mode_state_protocol_error(&mode_state);
                 break;
             }
-            send_buffer_status();
+            if (!send_buffer_status()) {
+                /* The event was already accepted onto the queue but its ack
+                 * was dropped by a saturated TX ring; Zero cannot tell the
+                 * two apart from a real timeout, so force ERROR (which also
+                 * discards the now-unconfirmed queue) instead of leaving
+                 * Zero and Pico state silently diverged. */
+                pico_mode_state_protocol_error(&mode_state);
+            }
             break;
         }
         case PICO_UART_QUEUE_END:
             (void)pico_uart_transport_queue_frame(
                 &uart_transport, PICO_UART_PLAY_READY, NULL, 0u);
-            send_buffer_status();
+            if (!send_buffer_status()) {
+                pico_mode_state_protocol_error(&mode_state);
+            }
             break;
         default:
+            /* Unreachable today (only the three QUEUE_* cases route here),
+             * but keep the same "unknown command is a protocol error"
+             * guarantee dispatch_command provides, in case this dispatcher
+             * is ever reused for another command type. */
+            pico_mode_state_protocol_error(&mode_state);
             break;
     }
 }

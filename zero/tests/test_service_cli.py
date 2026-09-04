@@ -16,6 +16,7 @@ from app.uart_protocol import (
     MAGIC,
     MODE_ARMED,
     MODE_CHANGED,
+    MODE_ERROR,
     MODE_PASS,
     MODE_RECORD,
     PICO_STATUS,
@@ -108,6 +109,8 @@ class ServiceAndCliTests(unittest.TestCase):
                 buffer_status(MODE_ARMED, 1, 1),
                 buffer_status(MODE_ARMED, 2, 0),
                 pico_frame(PLAY_READY),
+                # The Pico always follows PLAY_READY with one more BUFFER_STATUS.
+                buffer_status(MODE_ARMED, 2, 0),
             ]
         )
         transport = PicoTransport(stream)
@@ -124,6 +127,40 @@ class ServiceAndCliTests(unittest.TestCase):
             transport.queue_events([(1_000, bytes(range(8)))], timeout=1.0)
 
         self.assertEqual([write[2] for write in stream.writes], [QUEUE_CLEAR])
+
+    def test_queue_events_does_not_leak_trailing_buffer_status_into_next_call(self):
+        stream = FakeStream(
+            [
+                # First call fills the one-slot queue.
+                buffer_status(MODE_ARMED, 0, 1),
+                buffer_status(MODE_ARMED, 1, 0),
+                pico_frame(PLAY_READY),
+                buffer_status(MODE_ARMED, 1, 0),
+                # Second call's QUEUE_CLEAR really did reset the queue, but a
+                # transport that leaked the frame above would read it here
+                # instead and wrongly conclude free_capacity is still 0.
+                buffer_status(MODE_ARMED, 0, 5),
+                buffer_status(MODE_ARMED, 1, 4),
+                pico_frame(PLAY_READY),
+                buffer_status(MODE_ARMED, 1, 4),
+            ]
+        )
+        transport = PicoTransport(stream)
+
+        transport.queue_events([(1_000, bytes(range(8)))], timeout=1.0)
+        transport.queue_events([(2_000, bytes(range(8)))], timeout=1.0)
+
+        self.assertEqual(
+            [write[2] for write in stream.writes],
+            [QUEUE_CLEAR, QUEUE_EVENT, QUEUE_END, QUEUE_CLEAR, QUEUE_EVENT, QUEUE_END],
+        )
+
+    def test_queue_events_raises_immediately_when_pico_rejects_the_command(self):
+        stream = FakeStream([mode_changed(MODE_ERROR, 3)])
+        transport = PicoTransport(stream)
+
+        with self.assertRaisesRegex(PicoError, "ERROR state"):
+            transport.queue_events([(1_000, bytes(range(8)))], timeout=1.0)
 
     def test_stop_requires_a_successful_record_start(self):
         stream = FakeStream([])

@@ -8,10 +8,12 @@
 #include "hid_boot_keyboard.h"
 
 enum {
-    // 512 entries is ~8.5KB of RP2350 SRAM (520KB total), well within budget
-    // for a streaming flow-control window. This is not sized to hold whole
-    // recordings; the Zero feeder (a future phase) streams events against
-    // BUFFER_STATUS credits instead of requiring the full sequence to fit.
+    // 512 entries is 12KB of RP2350 SRAM (520KB total) -- each entry is 24
+    // bytes (the uint64_t offset pads the struct past its 17 packed field
+    // bytes), well within budget for a streaming flow-control window. This
+    // is not sized to hold whole recordings; the Zero feeder (a future
+    // phase) streams events against BUFFER_STATUS credits instead of
+    // requiring the full sequence to fit.
     PICO_PLAYBACK_QUEUE_CAPACITY = 512u,
 };
 
