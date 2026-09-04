@@ -7,16 +7,23 @@ active-session conflict or other `RecorderError` -> 409, anything else -> 500.
 The FastAPI lifespan opens the one persistent `PicoTransport`, reconciles the
 Pico to PASS on startup, and safely stops any active session and reconciles
 to PASS again on shutdown.
+
+`GET /api/ws` pushes periodic `Controller.status()` snapshots (including
+live buffer/playback diagnostics) to any connected browser; the static
+single-page UI under `zero/static/` is served at `/` for everything not
+matched by an `/api/*` route above.
 """
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .controller import Controller
@@ -34,9 +41,11 @@ from .transport import PicoTransport
 
 
 DEFAULT_RECORDINGS_DIR = Path(__file__).resolve().parents[1] / "recordings"
+DEFAULT_STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 DEFAULT_DEVICE = os.environ.get("ZERO_SERIAL_DEVICE", "/dev/serial0")
 DEFAULT_BAUD = int(os.environ.get("ZERO_SERIAL_BAUD", "921600"))
 DEFAULT_MODE_TIMEOUT = float(os.environ.get("ZERO_MODE_TIMEOUT", "2.0"))
+DEFAULT_STATUS_PUSH_INTERVAL = float(os.environ.get("ZERO_STATUS_PUSH_INTERVAL", "0.2"))
 
 
 class PlayRequest(BaseModel):
@@ -71,6 +80,8 @@ def create_app(
     mode_timeout: float = DEFAULT_MODE_TIMEOUT,
     transport: PicoTransport | None = None,
     record_poll_interval: float = 0.25,
+    status_push_interval: float = DEFAULT_STATUS_PUSH_INTERVAL,
+    static_dir: Path = DEFAULT_STATIC_DIR,
 ) -> FastAPI:
     """Build the FastAPI app.
 
@@ -162,6 +173,20 @@ def create_app(
     def delete(name: str) -> dict[str, object]:
         get_controller().delete_recording(name)
         return {"ok": True}
+
+    @app.websocket("/api/ws")
+    async def status_ws(websocket: WebSocket) -> None:
+        await websocket.accept()
+        try:
+            while True:
+                await websocket.send_json(get_controller().status())
+                await asyncio.sleep(status_push_interval)
+        except WebSocketDisconnect:
+            return
+
+    # Registered last: every /api/* route above is matched by exact path
+    # first, so this catch-all mount only ever serves the static frontend.
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
     return app
 

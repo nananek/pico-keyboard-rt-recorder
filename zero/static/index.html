@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pico Keyboard Recorder</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>Pico Keyboard Recorder</h1>
+    <div id="connection-banner" class="banner" hidden></div>
+  </header>
+
+  <main>
+    <section id="status-panel" class="panel">
+      <h2>Status</h2>
+      <dl class="status-grid">
+        <dt>State</dt><dd><span id="state-badge" class="badge">-</span></dd>
+        <dt>Active</dt><dd id="active-name">-</dd>
+        <dt>Last error</dt><dd id="last-error">-</dd>
+      </dl>
+      <div id="error-banner" class="banner banner-error" hidden></div>
+      <div id="underrun-banner" class="banner banner-warning" hidden></div>
+
+      <div id="diagnostics" hidden>
+        <h3>Diagnostics</h3>
+        <dl class="status-grid">
+          <dt>Pico buffer</dt>
+          <dd><span id="diag-queued-count">-</span> queued / <span id="diag-free-capacity">-</span> free</dd>
+          <dt>Recording events</dt>
+          <dd id="diag-record-count">-</dd>
+          <dt>Playback position</dt>
+          <dd>
+            <progress id="diag-progress" max="1" value="0"></progress>
+            <span id="diag-progress-text">-</span>
+          </dd>
+          <dt>Underruns</dt><dd id="diag-underrun-count">0</dd>
+        </dl>
+      </div>
+
+      <button id="stop-all-btn" type="button">Return to PASS</button>
+    </section>
+
+    <section id="recordings-panel" class="panel">
+      <h2>Recordings</h2>
+      <form id="record-form" class="inline-form">
+        <input id="record-name" type="text" placeholder="new recording name" required>
+        <button type="submit">Record</button>
+        <button id="record-stop-btn" type="button">Stop recording</button>
+      </form>
+      <table id="recordings-table">
+        <thead>
+          <tr>
+            <th>Name</th><th>Duration</th><th>Events</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <template id="recording-row-template">
+    <tr>
+      <td class="rec-name"></td>
+      <td class="rec-duration"></td>
+      <td class="rec-events"></td>
+      <td class="rec-actions">
+        <button type="button" data-action="play">Play</button>
+        <button type="button" data-action="abort" hidden>Abort</button>
+        <button type="button" data-action="download">Download</button>
+        <button type="button" data-action="rename">Rename</button>
+        <button type="button" data-action="delete">Delete</button>
+      </td>
+    </tr>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>

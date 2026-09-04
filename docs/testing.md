@@ -98,6 +98,22 @@ mid-stream (before `PLAY_FINISHED` arrives) and still returning to PASS. The
 FastAPI lifespan's startup/shutdown `Controller.safe_stop()` reconciliation is
 exercised by every test implicitly, since each one opens and closes an app.
 
+`test_web_ui.py` covers the static frontend and the `/api/ws` WebSocket added
+for issue #12: `GET /` serving `index.html`, `/app.js`/`/style.css` serving
+correctly, and that the explicit `/api/*` routes still take priority over the
+catch-all static mount. It drives the same `TestClient.websocket_connect`
+against a fake Pico byte stream to confirm a freshly connected socket
+receives a status snapshot with `diagnostics: {buffer: null, playback: null,
+recording: null}` while idle, that `diagnostics.recording.event_count` ticks
+up live during an active RECORD session and clears back to null once it
+stops, and (alongside `GET /api/status` directly) that `diagnostics.buffer`/
+`diagnostics.playback` report real `queued_count`/`free_capacity`/
+`queued_events`/`total_events` while a playback is mid-stream.
+`PlaybackSession.progress()`/`RecordingSession.progress()` are also tested
+directly in `test_playback.py`/`test_service_cli.py`, including that the
+diagnostic-only `elapsed_us_estimate` clamps to the (speed-scaled) recording
+duration rather than overshooting it.
+
 ## Hardware acceptance
 
 1. Verify the fixed wiring: UART0 GP0 TX/GP1 RX crossed to the Zero with common
@@ -267,6 +283,47 @@ checked against the Pico hardware timer.
    report and a final `MODE_CHANGED(PASS, OK)` are observed before the
    process exits, and that `systemctl restart` afterward again settles on
    PASS per step 1/2.
+
+## Web UI acceptance
+
+The static browser UI (`zero/static/`) is served by the same FastAPI app as
+the web API above and adds no new backend dependency; only the manual,
+browser-driven flow below is not covered by `test_web_ui.py`. Like every
+other hardware-touching issue in this project (#4/#6/#7/#9/#10/#11), this
+pass requires a physical Pico 2 + Zero 2 W and a browser and is not
+achievable in a sandboxed dev environment -- mark it pending rather than
+claiming false completion when only the automated `TestClient`/WebSocket
+checks above have run.
+
+1. With the service running (see "Zero web API acceptance" step 1), load
+   `http://<zero-host>:8000/` in a browser. Confirm the status panel shows
+   `PASS` and the Pico/mode state, with no stale "disconnected" banner.
+2. Start a recording from the UI, press/release physical keys, then stop it
+   from the UI. Confirm the new recording appears in the list with the
+   expected duration/event count, matching a `GET /api/recordings` call.
+3. Play that recording from the UI. Confirm the buffer and position
+   diagnostics update live (queued/free counts, elapsed/duration, event
+   progress) without a page reload, then Abort mid-playback and confirm an
+   all-keys-release at the PC and the UI settling back on PASS.
+4. Play a recording to completion untouched. Confirm the position indicator
+   reaches the end, the underrun count (0 for a clean run) stays visible,
+   and the state returns to PASS.
+5. Rename and delete an inactive recording from the UI; confirm the list
+   updates without a manual refresh. Confirm the UI disables rename/delete
+   for the recording currently being recorded or played, and that attempting
+   either via a stale/second tab still surfaces the backend's 409 inline
+   rather than silently failing.
+6. Force an ERROR state (e.g. disconnect UART briefly, or inject a bad frame
+   as in hardware-acceptance step 7). Confirm the UI visually distinguishes
+   ERROR from every other state and offers a "Return to PASS" action;
+   trigger it and confirm the Pico and UI both recover to PASS.
+7. Open the UI in two browser tabs at once. Confirm both reflect the same
+   live state, and that starting a session in one tab is visible in the
+   other without a manual refresh.
+8. Briefly stop the service (or block the network path) while the UI is
+   open. Confirm the UI shows a disconnected/retrying indicator and recovers
+   automatically (status updates resume) once the service is reachable
+   again, with no page reload required.
 
 ## UART baud rate (921600) acceptance
 
