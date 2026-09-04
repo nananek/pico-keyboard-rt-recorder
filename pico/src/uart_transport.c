@@ -2,8 +2,6 @@
 
 #include <string.h>
 
-#include "pico/time.h"
-
 static void latch_fault(pico_uart_transport_t *transport) {
     atomic_store_explicit(&transport->fault_pending, true, memory_order_relaxed);
 }
@@ -43,7 +41,6 @@ void pico_uart_transport_rx_push_isr(
     }
     transport->rx_bytes[head % PICO_UART_RX_RING_CAPACITY] = byte;
     transport->rx_head = (uint16_t)(head + 1u);
-    transport->last_rx_us = time_us_64();
 }
 
 void pico_uart_transport_hardware_error_isr(pico_uart_transport_t *transport) {
@@ -191,12 +188,4 @@ pico_uart_transport_stats_t pico_uart_transport_get_stats(
     const pico_uart_transport_t *transport) {
     const pico_uart_transport_stats_t empty = {0};
     return transport == NULL ? empty : transport->stats;
-}
-
-uint64_t pico_uart_transport_rx_idle_us(
-    const pico_uart_transport_t *transport, uint64_t now_us) {
-    if (transport == NULL) {
-        return 0u;
-    }
-    return now_us >= transport->last_rx_us ? now_us - transport->last_rx_us : 0u;
 }

@@ -36,9 +36,7 @@ credit after its first pop; and the persistent-underrun watchdog query
 2-second bound, becoming true once it elapses, and clearing again once a new
 event arrives. The mode transition test additionally covers
 `pico_mode_state_underrun_fault` entering ERROR with reason `UNDERRUN` the
-same way the existing UART-fault and protocol-error entry points do. The UART
-transport test covers `pico_uart_transport_rx_idle_us` growing with elapsed
-time since the last received byte and resetting on the next one. The
+same way the existing UART-fault and protocol-error entry points do. The
 main-output integration
 test verifies that PASS keeps its FIFO through a failed release, the
 release-sent iteration, and a normal HID-not-ready result; it also verifies
@@ -158,14 +156,12 @@ to schedule an HID report; all reports carry future Pico-relative offsets.
     PLAYING indefinitely: it enters ERROR, releases all keys, and sends
     `MODE_CHANGED(ERROR, UNDERRUN)`. Confirm ERROR blocks input and recovers
     only via a CRC-checked `MODE_SET(PASS)` -- no other command is accepted.
-15. Load and start a fresh playback run as in step 8, then, while PLAYING,
-    physically disconnect (or otherwise silence) UART for longer than the
-    same 2-second watchdog bound, without emptying the queue first. Confirm
-    Pico enters ERROR and sends `MODE_CHANGED(ERROR, UART_FAULT)` once
-    reconnected, releases all keys, and again recovers only via a
-    CRC-checked `MODE_SET(PASS)`. This exercises the RX-silence trigger
-    (`pico_uart_transport_rx_idle_us`) independently of step 14's
-    queue-empty trigger.
+    Note this watchdog is deliberately keyed off the queue staying empty, not
+    off raw UART silence: a genuinely dead link is caught by this same path
+    once the queue would need refilling and does not get it (see
+    `docs/realtime-design.md`), while step 7 above already covers UART
+    hardware/framing faults (including physical disconnection) independently
+    of playback state.
 
 UART event time is not used as a HID deadline; playback deadlines are the
 hardware-alarm-driven absolute `playback_start_us + offset_us` values

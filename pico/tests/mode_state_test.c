@@ -142,9 +142,9 @@ int main(void) {
     CHECK(last_reason == PICO_UART_REASON_FINISHED);
     CHECK(releases == 10u && clears == 10u && queue_clears == 8u);
 
-    // pico_mode_state_underrun_fault (Issue #10's persistent-underrun /
-    // UART-unresponsive-during-playback watchdog) is a second entry point
-    // into the same enter_error() as pico_mode_state_uart_fault above,
+    // pico_mode_state_underrun_fault (Issue #10's persistent-underrun
+    // watchdog) is a second entry point into the same enter_error() as
+    // pico_mode_state_uart_fault above,
     // differing only in the reported reason: same clear/release/queue-clear
     // behavior from a non-PASS, non-ERROR state, and the same no-op-but-still
     // -notifies behavior on a repeat call while already in ERROR.

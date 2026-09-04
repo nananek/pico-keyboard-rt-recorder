@@ -84,19 +84,29 @@ per-event dispatch cost stays constant regardless of run length. See
 
 The transient underrun above has no time bound of its own: as long as the
 sequence stays open, the scheduler waits indefinitely for streamed refill.
-Two distinct conditions instead enter ERROR, sharing one 2-second bound
-(`PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US`,
-`pico/include/playback_scheduler.h`) checked once per main-loop iteration
-while PLAYING (`pico/src/main.c`): the queue staying empty on an open
-sequence continuously past that bound
-(`pico_playback_scheduler_watchdog_expired`, reported as `MODE_CHANGED
-(ERROR, UNDERRUN)`), and the Pico receiving no UART byte at all for that
-same span (`pico_uart_transport_rx_idle_us`, an unresponsive link during
-playback, reported via the existing `MODE_CHANGED(ERROR, UART_FAULT)`
-path). Unlike the transient case, both release all keys, discard the queue,
-and block input until a CRC-checked `MODE_SET(PASS)` -- turning a stall
-that never recovers into a safe stop instead of an indefinite wait. See
-`docs/protocol.md` for the exact reason codes.
+The queue staying empty on an open sequence continuously past
+`PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US` (2 seconds,
+`pico/include/playback_scheduler.h`), checked once per main-loop iteration
+while PLAYING (`pico/src/main.c`) via the pure query
+`pico_playback_scheduler_watchdog_expired`, instead enters ERROR (reported
+as `MODE_CHANGED(ERROR, UNDERRUN)`): releasing all keys, discarding the
+queue, and blocking input until a CRC-checked `MODE_SET(PASS)` -- turning a
+stall that never recovers into a safe stop instead of an indefinite wait.
+See `docs/protocol.md` for the exact reason codes.
+
+This is deliberately keyed off the scheduler's own queue state rather than
+raw UART receive activity: Zero's credit-based feeder (`zero/app/playback.py`)
+legitimately sends nothing for long stretches once it has queued everything
+the Pico's buffer can currently hold (e.g. a whole short recording queued
+before `PLAY_START`, or a streaming run waiting on the next real-time
+dispatch to free capacity) -- silence on the wire is not by itself evidence
+of a stalled or disconnected link. An actually-dead link only becomes an
+operational problem once the queue would need refilling and does not get
+it, which is exactly the condition above already detects; a genuine
+transport-level fault (framing/parity/overrun, invalid frame) is separately
+and unconditionally caught by the pre-existing
+`pico_uart_transport_take_fault`/`pico_mode_state_uart_fault` path regardless
+of mode.
 
 The playback queue itself is a fixed-capacity ring buffer. `QUEUE_CLEAR` opens
 a new sequence in ARMED; `QUEUE_EVENT` and `QUEUE_END` remain valid after

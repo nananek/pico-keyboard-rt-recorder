@@ -3,11 +3,6 @@
 #include <stdio.h>
 
 static int failures;
-static uint64_t fake_timestamp_us;
-
-uint64_t time_us_64(void) {
-    return fake_timestamp_us;
-}
 
 #define CHECK(condition)                                                        \
     do {                                                                        \
@@ -194,38 +189,9 @@ static void test_command_validation_and_overflow_faults(void) {
     CHECK(pico_uart_transport_take_fault(&transport));
 }
 
-static void test_rx_idle_us_tracks_last_rx_and_resets_on_push(void) {
-    pico_uart_transport_t transport;
-
-    pico_uart_transport_init(&transport);
-
-    // No RX yet: idle time grows with now_us relative to the zero-initialized
-    // last_rx_us (init's whole-struct zero-init already covers this field,
-    // same as every other field).
-    CHECK(pico_uart_transport_rx_idle_us(&transport, 1000u) == 1000u);
-    CHECK(pico_uart_transport_rx_idle_us(&transport, 5000u) == 5000u);
-
-    // A byte pushed by the ISR-context handler stamps last_rx_us with the
-    // current time_us_64(), so idle time measured at that same instant drops
-    // back to zero.
-    fake_timestamp_us = 5000u;
-    pico_uart_transport_rx_push_isr(&transport, 0xAAu);
-    CHECK(pico_uart_transport_rx_idle_us(&transport, 5000u) == 0u);
-
-    // Idle time then grows again from that new last_rx_us as now_us advances.
-    CHECK(pico_uart_transport_rx_idle_us(&transport, 5100u) == 100u);
-    CHECK(pico_uart_transport_rx_idle_us(&transport, 7000u) == 2000u);
-
-    // A now_us that has not yet caught up to last_rx_us (e.g. a byte pushed
-    // between the caller's own now_us sample and this call) must not
-    // underflow: clamp to zero.
-    CHECK(pico_uart_transport_rx_idle_us(&transport, 4000u) == 0u);
-}
-
 int main(void) {
     test_split_frame_and_ring_wraparound();
     test_parser_rejects_and_resynchronizes();
     test_command_validation_and_overflow_faults();
-    test_rx_idle_us_tracks_last_rx_and_resets_on_push();
     return failures == 0 ? 0 : 1;
 }

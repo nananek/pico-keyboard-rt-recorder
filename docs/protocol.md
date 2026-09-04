@@ -65,12 +65,7 @@ blocking input until a CRC-checked `MODE_SET(PASS)`. This is distinct from
 the *transient* underrun below (`PLAY_UNDERRUN`, `underrun_count`), which
 stays PLAYING indefinitely as long as the sequence is still open; the
 watchdog is what turns a stall that never recovers into a safe stop instead
-of hanging forever. `UART_FAULT` covers two trigger conditions: the
-pre-existing hardware/framing/parity/overrun and invalid-frame faults
-latched by the UART transport, and (new in this watchdog) the Pico
-receiving no UART byte at all for `PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US`
-while PLAYING -- an unresponsive link during playback is treated the same as
-any other UART fault, entering ERROR via the same path.
+of hanging forever.
 
 ## Mode semantics and payloads
 
