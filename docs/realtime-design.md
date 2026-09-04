@@ -9,6 +9,19 @@ The ring holds 256 bytes: more than three maximum-size 71-byte frames and
 about 5.5 ms of continuous 460800-baud 8-N-1 input, while the main loop's
 normal sleep interval is 1 ms.
 
+Startup is safe by construction, with no separate hardware watchdog
+involved: `pico_mode_state_init` always zero-initializes the mode state and
+then explicitly sets `PICO_UART_MODE_PASS` before `main()` does anything
+else with it, and both UART hardware init and the TinyUSB device/host stack
+inits happen only after `pico_mode_state_init` has already run -- so no
+physical or UART input can be processed before PASS is established. No code
+in `pico/src` or `pico/include` uses a Pico-SDK reset-surviving RAM
+annotation (`__uninitialized_ram` or similar), so every reset starts from a
+clean, zero-initialized state with no stale mode, queue, or fault data
+carried over. This satisfies Issue #10's "safe startup defaults" scope item
+without any code change; the RP2350 hardware watchdog peripheral remains
+explicitly out of scope, a candidate for a future issue.
+
 The main loop resynchronizes on `0xA5`, validates version 2, bounded length,
 CRC-16/CCITT-FALSE, direction/type, and payload shape. Valid commands enter a
 small command queue. Invalid input never changes mode directly and causes a
@@ -68,6 +81,22 @@ at run end, by sorting that retained sample set (never on the hot path), so
 per-event dispatch cost stays constant regardless of run length. See
 `docs/protocol.md` for the exact `PLAY_STARTED`/`PLAY_FINISHED`/
 `PLAY_ABORTED`/`PLAY_METRICS` payloads and reasons.
+
+The transient underrun above has no time bound of its own: as long as the
+sequence stays open, the scheduler waits indefinitely for streamed refill.
+Two distinct conditions instead enter ERROR, sharing one 2-second bound
+(`PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US`,
+`pico/include/playback_scheduler.h`) checked once per main-loop iteration
+while PLAYING (`pico/src/main.c`): the queue staying empty on an open
+sequence continuously past that bound
+(`pico_playback_scheduler_watchdog_expired`, reported as `MODE_CHANGED
+(ERROR, UNDERRUN)`), and the Pico receiving no UART byte at all for that
+same span (`pico_uart_transport_rx_idle_us`, an unresponsive link during
+playback, reported via the existing `MODE_CHANGED(ERROR, UART_FAULT)`
+path). Unlike the transient case, both release all keys, discard the queue,
+and block input until a CRC-checked `MODE_SET(PASS)` -- turning a stall
+that never recovers into a safe stop instead of an indefinite wait. See
+`docs/protocol.md` for the exact reason codes.
 
 The playback queue itself is a fixed-capacity ring buffer. `QUEUE_CLEAR` opens
 a new sequence in ARMED; `QUEUE_EVENT` and `QUEUE_END` remain valid after

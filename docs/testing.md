@@ -30,8 +30,16 @@ no-op once not running; min/max/sum/p95/p99 lateness matched against a
 hand-computed sample set; `samples_truncated` once a run dispatches more
 events than the fixed 2048-sample log holds; an open empty sequence remaining
 PLAYING with one edge-triggered underrun notification; late refill retaining
-the original absolute deadline; and a full queue granting new flow-control
-credit after its first pop. The main-output integration
+the original absolute deadline; a full queue granting new flow-control
+credit after its first pop; and the persistent-underrun watchdog query
+(`pico_playback_scheduler_watchdog_expired`) staying false below the
+2-second bound, becoming true once it elapses, and clearing again once a new
+event arrives. The mode transition test additionally covers
+`pico_mode_state_underrun_fault` entering ERROR with reason `UNDERRUN` the
+same way the existing UART-fault and protocol-error entry points do. The UART
+transport test covers `pico_uart_transport_rx_idle_us` growing with elapsed
+time since the last received byte and resetting on the next one. The
+main-output integration
 test verifies that PASS keeps its FIFO through a failed release, the
 release-sent iteration, and a normal HID-not-ready result; it also verifies
 that RECORD drains to UART while HID output is blocked. Only a validated
@@ -143,6 +151,21 @@ to schedule an HID report; all reports carry future Pico-relative offsets.
     deadline is already past, then send `QUEUE_END`. Confirm it dispatches
     immediately, lateness reflects the whole stall (the deadline did not
     shift), `underrun_count` increments, and normal completion follows.
+14. Repeat step 13, but this time do not resume feeding: leave the open
+    sequence's queue empty for longer than the 2-second watchdog bound
+    (`PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US`,
+    `pico/include/playback_scheduler.h`). Confirm the run does not stay
+    PLAYING indefinitely: it enters ERROR, releases all keys, and sends
+    `MODE_CHANGED(ERROR, UNDERRUN)`. Confirm ERROR blocks input and recovers
+    only via a CRC-checked `MODE_SET(PASS)` -- no other command is accepted.
+15. Load and start a fresh playback run as in step 8, then, while PLAYING,
+    physically disconnect (or otherwise silence) UART for longer than the
+    same 2-second watchdog bound, without emptying the queue first. Confirm
+    Pico enters ERROR and sends `MODE_CHANGED(ERROR, UART_FAULT)` once
+    reconnected, releases all keys, and again recovers only via a
+    CRC-checked `MODE_SET(PASS)`. This exercises the RX-silence trigger
+    (`pico_uart_transport_rx_idle_us`) independently of step 14's
+    queue-empty trigger.
 
 UART event time is not used as a HID deadline; playback deadlines are the
 hardware-alarm-driven absolute `playback_start_us + offset_us` values
