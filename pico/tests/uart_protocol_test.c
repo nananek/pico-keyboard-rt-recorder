@@ -130,10 +130,30 @@ static void test_playback_scheduler_message_payloads(void) {
     CHECK(!pico_uart_type_is_command(PICO_UART_PLAY_METRICS));
 }
 
+static void test_queue_command_state_guard(void) {
+    CHECK(pico_uart_queue_command_allowed(
+        PICO_UART_QUEUE_CLEAR, PICO_UART_MODE_ARMED));
+    CHECK(!pico_uart_queue_command_allowed(
+        PICO_UART_QUEUE_CLEAR, PICO_UART_MODE_PLAYING));
+
+    for (uint8_t type = PICO_UART_QUEUE_EVENT;
+         type <= PICO_UART_QUEUE_END;
+         ++type) {
+        CHECK(pico_uart_queue_command_allowed(type, PICO_UART_MODE_ARMED));
+        CHECK(pico_uart_queue_command_allowed(type, PICO_UART_MODE_PLAYING));
+        CHECK(!pico_uart_queue_command_allowed(type, PICO_UART_MODE_PASS));
+        CHECK(!pico_uart_queue_command_allowed(type, PICO_UART_MODE_RECORD));
+        CHECK(!pico_uart_queue_command_allowed(type, PICO_UART_MODE_ERROR));
+    }
+    CHECK(!pico_uart_queue_command_allowed(
+        PICO_UART_PLAY_START, PICO_UART_MODE_ARMED));
+}
+
 int main(void) {
     test_encode_decode_and_crc();
     test_decode_rejects_frame_errors();
     test_command_payload_and_type_rules();
     test_playback_scheduler_message_payloads();
+    test_queue_command_state_guard();
     return failures == 0 ? 0 : 1;
 }

@@ -9,6 +9,10 @@ from app.uart_protocol import (
     MODE_CHANGED,
     MODE_PASS,
     MODE_SET,
+    PLAY_ABORT,
+    PLAY_METRICS,
+    PLAY_START,
+    PLAY_UNDERRUN,
     QUEUE_CLEAR,
     QUEUE_END,
     QUEUE_EVENT,
@@ -18,11 +22,15 @@ from app.uart_protocol import (
     IncrementalDecoder,
     crc16_ccitt_false,
     encode_frame,
+    encode_play_abort,
+    encode_play_start,
     encode_queue_clear,
     encode_queue_end,
     encode_queue_event,
     validate_buffer_status,
     validate_record_event,
+    validate_play_metrics,
+    validate_play_underrun,
 )
 
 
@@ -120,6 +128,31 @@ class UartProtocolTests(unittest.TestCase):
             validate_buffer_status(Frame(BUFFER_STATUS, payload[:-1]))
         with self.assertRaises(ProtocolError):
             validate_buffer_status(Frame(BUFFER_STATUS, struct.pack("<BHH", 99, 0, 0)))
+
+    def test_encode_play_commands_have_no_payload(self):
+        for encoder, message_type in (
+            (encode_play_start, PLAY_START),
+            (encode_play_abort, PLAY_ABORT),
+        ):
+            frame = encoder()
+            self.assertEqual(frame[:5], bytes((MAGIC, VERSION, message_type, 0, 0)))
+            self.assertEqual(len(frame), 7)
+
+    def test_validate_play_underrun_and_metrics(self):
+        underrun = Frame(PLAY_UNDERRUN, struct.pack("<QH", 123_456, 512))
+        self.assertEqual(validate_play_underrun(underrun), (123_456, 512))
+        with self.assertRaises(ProtocolError):
+            validate_play_underrun(Frame(PLAY_UNDERRUN, b"\0" * 9))
+
+        payload = struct.pack("<IIiiqiiB", 10, 2, 1, 9, 42, 8, 9, 1)
+        metrics = validate_play_metrics(Frame(PLAY_METRICS, payload))
+        self.assertEqual(metrics.dispatched_count, 10)
+        self.assertEqual(metrics.underrun_count, 2)
+        self.assertTrue(metrics.samples_truncated)
+        with self.assertRaisesRegex(ProtocolError, "zero or one"):
+            validate_play_metrics(
+                Frame(PLAY_METRICS, struct.pack("<IIiiqiiB", 0, 0, 0, 0, 0, 0, 0, 2))
+            )
 
 
 if __name__ == "__main__":

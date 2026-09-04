@@ -10,13 +10,11 @@
 // code path end-to-end through the same internal C APIs QUEUE_EVENT and
 // PLAY_START would otherwise reach over UART (pico_playback_queue_push,
 // pico_mode_state_handle_mode_set/play_start, pico_playback_scheduler_start),
-// without any UART input. This exists only because the 1000-event/10ms
-// acceptance target exceeds the fixed 512-entry playback queue capacity and
-// real UART-fed streaming refill is Issue #9's scope, not this one's: this
-// module keeps the queue topped up from its own synthetic event source as
-// the scheduler drains it, so the production dispatch, mode-state, and
-// metrics code is exercised at the full 1000-event scale. No test-only UART
-// command is introduced anywhere in this path.
+// without any UART input. The 1000-event/10ms acceptance target exceeds the
+// fixed 512-entry playback queue capacity, so this benchmark mirrors the
+// production Zero feeder by topping up from its synthetic source as the
+// scheduler drains. No test-only UART command is introduced anywhere in this
+// path.
 void pico_playback_test_source_init(
     pico_mode_state_t *mode,
     pico_playback_queue_t *queue,

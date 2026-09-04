@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 from pathlib import Path
 import sys
 from typing import Sequence
 
 from .errors import ModeRejected, RecorderError, StorageError, TransportTimeout
+from .playback import PlaybackSession
 from .recording import RecordingStore, validate_name
 from .service import RecordingSession, stop_pico
 from .transport import PicoTransport
@@ -28,6 +30,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     stop = subcommands.add_parser("stop", help="request the Pico's safe PASS mode")
     _add_serial_options(stop)
+
+    play = subcommands.add_parser("play", help="prebuffer and stream one saved recording")
+    play.add_argument("name")
+    play.add_argument("--speed", type=float, default=1.0)
+    play.add_argument("--prebuffer-ms", type=float, default=500.0)
+    play.add_argument(
+        "--playback-timeout",
+        type=float,
+        default=None,
+        help="whole-run timeout in seconds (default: scaled duration plus margin)",
+    )
+    _add_serial_options(play)
 
     subcommands.add_parser("list", help="list valid saved recordings")
     dump = subcommands.add_parser("dump", help="print one recording as JSON")
@@ -105,6 +119,45 @@ def _run_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_play(args: argparse.Namespace) -> int:
+    name = validate_name(args.name)
+    recording = RecordingStore(args.recordings_dir).load(name)
+    transport, stream = _open_transport(args.device, args.baud)
+    session = None
+    completed = False
+    try:
+        session = PlaybackSession(
+            transport,
+            recording,
+            speed=args.speed,
+            prebuffer_ms=args.prebuffer_ms,
+            mode_timeout=args.mode_timeout,
+            playback_timeout=args.playback_timeout,
+        )
+        result = session.play(return_to_pass=True)
+        completed = True
+        value = asdict(result)
+        _json_stdout({"ok": True, "playback": value})
+        return 0
+    except KeyboardInterrupt:
+        try:
+            result = session.abort(return_to_pass=True)
+        except Exception as error:
+            return _json_error(error, 4)
+        completed = True
+        value = None if result is None else asdict(result)
+        _json_stdout({"ok": True, "playback": value})
+        return 0
+    except Exception as error:
+        return _json_error(error, _exit_code(error))
+    finally:
+        if not completed and session is not None:
+            cleanup_error = session.abort_best_effort()
+            if cleanup_error is not None:
+                print(json.dumps({"ok": False, "cleanup_error": str(cleanup_error)}), file=sys.stderr)
+        stream.close()
+
+
 def _exit_code(error: Exception) -> int:
     if isinstance(error, StorageError):
         return 5
@@ -125,6 +178,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "record":
             return _run_record(args)
+        if args.command == "play":
+            return _run_play(args)
         if args.command == "stop":
             return _run_stop(args)
         raise AssertionError(f"unhandled command {args.command}")

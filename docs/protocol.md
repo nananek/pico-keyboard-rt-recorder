@@ -63,11 +63,12 @@ returns `MODE_CHANGED(current_state, INVALID_TARGET)`.
   emits `RECORD_EVENT` to Zero without forwarding it to the PC.
 - ARMED and PLAYING block physical reports. PLAY_START is valid only in ARMED;
   it samples a Pico epoch, arms the absolute-deadline playback scheduler
-  against it, and enters PLAYING. The queue draining to empty on its own
-  returns to ARMED with reason FINISHED; PLAY_ABORT returns to ARMED with
-  reason ABORTED instead, stopping the scheduler early. Every successful mode
-  transition, abort, or fault that enters ERROR clears queued physical reports
-  and sends an all-keys-release report.
+  against it, and enters PLAYING. An empty queue finishes only after
+  `QUEUE_END`; before that marker it is an underrun and the scheduler remains
+  PLAYING to accept streamed events. PLAY_ABORT returns to ARMED with reason
+  ABORTED, stopping the scheduler early. Every successful mode transition,
+  abort, or fault that enters ERROR clears queued physical reports and sends
+  an all-keys-release report.
 - PASS entered from a non-PASS state cancels playback, clears stale physical
   data, and sends all keys released before waiting for a new host report. A
   repeated `MODE_SET(PASS)` while already in PASS only acknowledges the request;
@@ -76,24 +77,26 @@ returns `MODE_CHANGED(current_state, INVALID_TARGET)`.
   input and recovers only with a CRC-checked `MODE_SET(PASS)`. A fault in PASS
   leaves physical input intact and reports the fault reason without entering
   ERROR.
-- `QUEUE_CLEAR`, `QUEUE_EVENT`, and `QUEUE_END` load the fixed-capacity Pico
-  playback queue and are valid only in ARMED; receiving any of them outside
-  ARMED is a protocol error, same as any other unexpected command. Each
-  accepted queue command replies with `BUFFER_STATUS`. `QUEUE_CLEAR` discards
-  every currently queued event. `QUEUE_EVENT` enqueues one event, or is a
-  protocol error if the queue is already full: Zero must stay within the
-  `free_capacity` last advertised by `BUFFER_STATUS`. `QUEUE_END` additionally
-  replies `PLAY_READY` once, signalling Zero may send `PLAY_START`. Unlike
-  every other state change, `PLAY_START` does not clear the queue it is about
-  to consume; only `PLAY_ABORT`, a transition to PASS, or a fault entering
-  ERROR clears it.
+- `QUEUE_CLEAR` is valid only in ARMED: it discards the queue and opens a new
+  sequence. `QUEUE_EVENT` and `QUEUE_END` are valid in ARMED or PLAYING so a
+  recording can stream beyond the fixed Pico queue capacity. Other states are
+  protocol errors. Each accepted queue command replies with `BUFFER_STATUS`.
+  `QUEUE_EVENT` enqueues one event, or is a protocol error if the queue is
+  already full: Zero must stay within advertised `free_capacity`.
+  `QUEUE_END` closes the sequence. In ARMED it additionally replies
+  `PLAY_READY`, signalling Zero may send `PLAY_START`; in PLAYING it does not
+  send the now-inapplicable `PLAY_READY`. Unlike every other state change,
+  `PLAY_START` does not clear the queue it is about to consume; only
+  `PLAY_ABORT`, a transition to PASS, or a fault entering ERROR clears it.
 
 | Action | Valid current state | Result |
 | --- | --- | --- |
 | `MODE_SET(PASS)` | Any | PASS; only a non-PASS source state clears input and releases keys. |
 | `MODE_SET(RECORD)` | PASS, RECORD | RECORD |
 | `MODE_SET(ARMED)` | PASS, ARMED | ARMED |
-| `QUEUE_CLEAR` / `QUEUE_EVENT` / `QUEUE_END` | ARMED | Modifies the playback queue; replies `BUFFER_STATUS` (`QUEUE_END` also replies `PLAY_READY`) |
+| `QUEUE_CLEAR` | ARMED | Clears the queue, opens a sequence, and replies `BUFFER_STATUS` |
+| `QUEUE_EVENT` | ARMED, PLAYING | Appends a future event and replies `BUFFER_STATUS` |
+| `QUEUE_END` | ARMED, PLAYING | Closes the sequence and replies `BUFFER_STATUS`; also replies `PLAY_READY` only in ARMED |
 | `PLAY_START` | ARMED | PLAYING |
 | `PLAY_ABORT` | ARMED, PLAYING | ARMED with reason `ABORTED` |
 
@@ -103,8 +106,11 @@ offsets are absolute from the Pico playback epoch. `MODE_CHANGED` is
 `state u8, reason u8`. `PICO_STATUS` is `state u8` followed by four fault
 flags (RX overflow, hardware error, invalid frame, TX drop). `BUFFER_STATUS`
 is `state u8`, `queued_count u16 LE`, `free_capacity u16 LE`; both counts are
-queue slots, not bytes. `PLAY_READY` has no payload. PING/PONG have no
-payload.
+queue slots, not bytes. In addition to queue-command acknowledgements, an open
+streaming sequence emits an asynchronous `BUFFER_STATUS` when dispatch changes
+a full queue to one with free space. This edge notification prevents a Zero
+feeder with zero credit from deadlocking without emitting one frame per
+ordinary dispatch. `PLAY_READY` has no payload. PING/PONG have no payload.
 
 `PLAY_STARTED` carries the single `playback_start_us u64 LE` sampled when
 `PLAY_START` was accepted: this is the same value handed to the scheduler as
@@ -119,8 +125,7 @@ before the run ended, and then the `MODE_CHANGED(ARMED, FINISHED)` or
 paths queue their outcome frame and `PLAY_METRICS` before `MODE_CHANGED`, so
 a client can rely on that order regardless of which way the run ended.
 
-`PLAY_METRICS` is 33 bytes: `dispatched_count u32 LE`, `underrun_count u32 LE`
-(always 0; reserved for Issue #9's Zero streaming feeder, see below),
+`PLAY_METRICS` is 33 bytes: `dispatched_count u32 LE`, `underrun_count u32 LE`,
 `min_lateness_us i32 LE`, `max_lateness_us i32 LE`, `sum_lateness_us i64 LE`,
 `p95_lateness_us i32 LE`, `p99_lateness_us i32 LE`, and `samples_truncated
 u8`. Lateness is `actual HID dispatch time - (playback_start_us + offset_us)`
@@ -131,12 +136,16 @@ raw lateness samples; `min`/`max`/`sum`/`dispatched_count` cover every
 dispatched event regardless of that cap, and `samples_truncated` is nonzero
 only when a run dispatches more than 2048 events.
 
-`PLAY_UNDERRUN`'s existing 10-byte payload constraint is unchanged but
-remains reserved and unsent: under the current `QUEUE_END` -> `PLAY_READY`
--> `PLAY_START` contract the queue is always a complete pre-buffered sequence
-by the time `PLAY_START` runs, so an empty queue is always normal completion,
-never an underrun. It is expected to gain meaning once a future Zero
-streaming feeder (Issue #9) can leave the queue empty mid-playback.
+`PLAY_UNDERRUN` is 10 bytes: `elapsed_offset_us u64 LE`, the elapsed offset
+from the unchanged Pico playback epoch when the open sequence first became
+empty, followed by `free_capacity u16 LE`. It is emitted once per contiguous
+empty interval; repeated scheduler polling while still empty does not emit
+duplicates. The scheduler stays PLAYING, increments `underrun_count`, and
+retries the queue on following main-loop iterations. When a later event
+arrives, its deadline remains `playback_start_us + offset_us`; the underrun
+does not move the epoch or any deadline, so late arrival appears only as
+increased lateness. Once `QUEUE_END` has closed the sequence, draining the
+queue finishes normally instead.
 
 If the bounded TX ring is full, Pico drops the whole outgoing frame and latches
 the TX-drop status flag; it never blocks the host callback or a state
@@ -144,3 +153,6 @@ transition. `RECORD_EVENT` loss is observable through that flag. A Zero that
 misses a `MODE_CHANGED` acknowledgement retries its idempotent `MODE_SET`.
 
 Any frame or payload change requires a versioned update and matching tests.
+This streaming extension remains version 2 because it assigns semantics to
+the already-reserved `PLAY_UNDERRUN` type and existing 10-byte payload shape,
+and broadens valid states without changing any frame value or layout.

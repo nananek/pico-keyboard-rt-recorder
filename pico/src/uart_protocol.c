@@ -110,6 +110,16 @@ bool pico_uart_type_is_command(uint8_t type) {
     return type >= PICO_UART_QUEUE_CLEAR && type <= PICO_UART_MODE_SET;
 }
 
+bool pico_uart_queue_command_allowed(uint8_t type, uint8_t state) {
+    if (type == PICO_UART_QUEUE_CLEAR) {
+        return state == PICO_UART_MODE_ARMED;
+    }
+    if (type == PICO_UART_QUEUE_EVENT || type == PICO_UART_QUEUE_END) {
+        return state == PICO_UART_MODE_ARMED || state == PICO_UART_MODE_PLAYING;
+    }
+    return false;
+}
+
 bool pico_uart_frame_payload_valid(const pico_uart_frame_t *frame) {
     if (frame == NULL || !pico_uart_type_known(frame->type)) {
         return false;

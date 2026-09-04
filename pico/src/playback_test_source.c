@@ -91,15 +91,15 @@ void pico_playback_test_source_task(void) {
     }
     // PICO_PLAYBACK_TEST_RUNNING: keep the queue topped up from the tail as
     // the scheduler drains its head, until all synthetic events have been
-    // queued. Once drained, the scheduler's own on_complete path reports
-    // PLAY_FINISHED + PLAY_METRICS over UART0 exactly as a real PLAY_START
-    // would; this module has no reporting logic of its own.
+    // queued, then close the sequence. Once drained, the scheduler's own
+    // on_complete path reports PLAY_FINISHED + PLAY_METRICS over UART0 exactly
+    // as a real PLAY_START would; this module has no reporting logic of its
+    // own.
     if (test_pushed_count < PICO_PLAYBACK_TEST_TOTAL_EVENTS) {
         fill_available_slots();
-        if (test_pushed_count >= PICO_PLAYBACK_TEST_TOTAL_EVENTS) {
-            test_stage = PICO_PLAYBACK_TEST_DONE;
-        }
-    } else {
+    }
+    if (test_pushed_count >= PICO_PLAYBACK_TEST_TOTAL_EVENTS) {
+        pico_playback_scheduler_mark_sequence_ended(test_scheduler);
         test_stage = PICO_PLAYBACK_TEST_DONE;
     }
 }

@@ -136,6 +136,10 @@ static bool fake_send_report(
 static uint32_t complete_calls;
 static uint8_t last_reason;
 static pico_playback_scheduler_metrics_t last_metrics;
+static uint32_t underrun_calls;
+static uint64_t last_underrun_offset_us;
+static uint16_t last_underrun_free_capacity;
+static uint32_t buffer_available_calls;
 
 static void fake_on_complete(
     void *user,
@@ -145,6 +149,21 @@ static void fake_on_complete(
     ++complete_calls;
     last_reason = reason;
     last_metrics = *metrics;
+}
+
+static void fake_on_underrun(
+    void *user,
+    uint64_t elapsed_offset_us,
+    uint16_t free_capacity) {
+    (void)user;
+    ++underrun_calls;
+    last_underrun_offset_us = elapsed_offset_us;
+    last_underrun_free_capacity = free_capacity;
+}
+
+static void fake_on_buffer_available(void *user) {
+    (void)user;
+    ++buffer_available_calls;
 }
 
 static void reset_all(void) {
@@ -172,6 +191,10 @@ static void reset_all(void) {
     complete_calls = 0u;
     last_reason = 0u;
     memset(&last_metrics, 0, sizeof(last_metrics));
+    underrun_calls = 0u;
+    last_underrun_offset_us = 0u;
+    last_underrun_free_capacity = 0u;
+    buffer_available_calls = 0u;
 }
 
 static void init_scheduler(
@@ -180,6 +203,8 @@ static void init_scheduler(
     const pico_playback_scheduler_callbacks_t callbacks = {
         .send_report = fake_send_report,
         .on_complete = fake_on_complete,
+        .on_underrun = fake_on_underrun,
+        .on_buffer_available = fake_on_buffer_available,
         .user = NULL,
     };
     pico_playback_scheduler_init(scheduler, queue, &callbacks);
@@ -196,6 +221,7 @@ static void test_normal_order_and_deadlines(void) {
     push_event(&queue, 10000u, 2u);
     push_event(&queue, 20000u, 3u);
     init_scheduler(&scheduler, &queue);
+    pico_playback_scheduler_mark_sequence_ended(&scheduler);
 
     fake_timestamp_us = 1000000u;
     pico_playback_scheduler_start(&scheduler, fake_timestamp_us);
@@ -239,6 +265,7 @@ static void test_late_run_does_not_shift_later_deadlines(void) {
     push_event(&queue, 10000u, 2u);
     push_event(&queue, 20000u, 3u);
     init_scheduler(&scheduler, &queue);
+    pico_playback_scheduler_mark_sequence_ended(&scheduler);
 
     const uint64_t epoch = 5000000u;
     fake_timestamp_us = epoch;
@@ -272,6 +299,7 @@ static void test_hid_not_ready_retries_head_event_in_order(void) {
     push_event(&queue, 0u, 7u);
     push_event(&queue, 5000u, 8u);
     init_scheduler(&scheduler, &queue);
+    pico_playback_scheduler_mark_sequence_ended(&scheduler);
 
     fake_timestamp_us = 100u;
     send_ready = false;
@@ -313,6 +341,7 @@ static void test_arm_next_cancels_stale_pending_alarm(void) {
     push_event(&queue, 1000u, 2u);
     push_event(&queue, 2000u, 3u);
     init_scheduler(&scheduler, &queue);
+    pico_playback_scheduler_mark_sequence_ended(&scheduler);
 
     fake_timestamp_us = 0u;
     pico_playback_scheduler_start(&scheduler, 0u);
@@ -350,6 +379,7 @@ static void test_stop_reports_partial_metrics_as_aborted(void) {
     push_event(&queue, 10000u, 2u);
     push_event(&queue, 20000u, 3u);
     init_scheduler(&scheduler, &queue);
+    pico_playback_scheduler_mark_sequence_ended(&scheduler);
 
     fake_timestamp_us = 0u;
     pico_playback_scheduler_start(&scheduler, 0u);
@@ -387,6 +417,7 @@ static void test_metrics_statistics_match_hand_computed_values(void) {
         push_event(&queue, (uint64_t)i * interval, (uint8_t)i);
     }
     init_scheduler(&scheduler, &queue);
+    pico_playback_scheduler_mark_sequence_ended(&scheduler);
 
     fake_timestamp_us = 0u;
     pico_playback_scheduler_start(&scheduler, 0u);
@@ -422,6 +453,7 @@ static void test_samples_truncated_beyond_capacity(void) {
     send_ready = true;
     pico_playback_queue_init(&queue);
     init_scheduler(&scheduler, &queue);
+    pico_playback_scheduler_mark_sequence_ended(&scheduler);
 
     refill_queue = &queue;
     refill_target = PICO_PLAYBACK_SCHEDULER_MAX_SAMPLES + 5u;
@@ -449,6 +481,69 @@ static void test_samples_truncated_beyond_capacity(void) {
     CHECK(last_metrics.samples_truncated);
 }
 
+static void test_streaming_underrun_resumes_without_shifting_deadline(void) {
+    pico_playback_queue_t queue;
+    pico_playback_scheduler_t scheduler;
+
+    reset_all();
+    send_ready = true;
+    pico_playback_queue_init(&queue);
+    push_event(&queue, 0u, 1u);
+    init_scheduler(&scheduler, &queue);
+
+    const uint64_t epoch = 1000000u;
+    fake_timestamp_us = epoch;
+    pico_playback_scheduler_start(&scheduler, epoch);
+    pico_playback_scheduler_task(&scheduler);
+
+    CHECK(sent_count == 1u);
+    CHECK(complete_calls == 0u);
+    CHECK(underrun_calls == 1u);
+    CHECK(last_underrun_offset_us == 0u);
+    CHECK(last_underrun_free_capacity == PICO_PLAYBACK_QUEUE_CAPACITY);
+    CHECK(pico_playback_scheduler_is_running(&scheduler));
+
+    // Repeated empty tasks are the same underrun interval and do not spam a
+    // second notification or counter increment.
+    fake_timestamp_us = epoch + 10000u;
+    pico_playback_scheduler_task(&scheduler);
+    CHECK(underrun_calls == 1u);
+
+    // The late refill keeps its original epoch+20ms deadline. At epoch+50ms
+    // its measured lateness must therefore be 30ms, not zero after a shifted
+    // restart. QUEUE_END can arrive while PLAYING before that event drains.
+    push_event(&queue, 20000u, 2u);
+    pico_playback_scheduler_mark_sequence_ended(&scheduler);
+    fake_timestamp_us = epoch + 50000u;
+    pico_playback_scheduler_task(&scheduler);
+
+    CHECK(sent_count == 2u && sent_reports[1].keycode[0] == 2u);
+    CHECK(complete_calls == 1u && last_reason == PICO_UART_REASON_FINISHED);
+    CHECK(last_metrics.underrun_count == 1u);
+    CHECK(last_metrics.max_lateness_us == 30000);
+    CHECK(!pico_playback_scheduler_is_running(&scheduler));
+}
+
+static void test_full_streaming_queue_grants_credit_after_first_pop(void) {
+    pico_playback_queue_t queue;
+    pico_playback_scheduler_t scheduler;
+
+    reset_all();
+    send_ready = true;
+    pico_playback_queue_init(&queue);
+    for (uint32_t i = 0u; i < PICO_PLAYBACK_QUEUE_CAPACITY; ++i) {
+        push_event(&queue, 0u, (uint8_t)i);
+    }
+    init_scheduler(&scheduler, &queue);
+
+    pico_playback_scheduler_start(&scheduler, 0u);
+    pico_playback_scheduler_task(&scheduler);
+
+    CHECK(buffer_available_calls == 1u);
+    CHECK(underrun_calls == 1u);
+    CHECK(complete_calls == 0u);
+}
+
 int main(void) {
     test_normal_order_and_deadlines();
     test_late_run_does_not_shift_later_deadlines();
@@ -457,5 +552,7 @@ int main(void) {
     test_stop_reports_partial_metrics_as_aborted();
     test_metrics_statistics_match_hand_computed_values();
     test_samples_truncated_beyond_capacity();
+    test_streaming_underrun_resumes_without_shifting_deadline();
+    test_full_streaming_queue_grants_credit_after_first_pop();
     return failures == 0 ? 0 : 1;
 }
