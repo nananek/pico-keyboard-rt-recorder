@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 import math
+import threading
 
 from .errors import ProtocolError, RecorderError, TransportTimeout
 from .recording import MAX_U64, Recording, RecordingEvent
@@ -138,6 +139,15 @@ class PlaybackSession:
         self._deadline = 0.0
         self.playback_start_us = 0
         self._underruns: list[UnderrunNotice] = []
+        # Guards the fields below, which are written by the background
+        # worker thread running start()/finish() but read by progress()
+        # from a web request or WebSocket-push thread while playback is
+        # in flight.
+        self._progress_lock = threading.Lock()
+        self._queued_count = 0
+        self._reported_next_event = 0
+        self._underrun_count = 0
+        self._start_wallclock: float | None = None
 
     def start(self) -> int:
         """Enter ARMED, prebuffer at least 500 ms, and start the Pico epoch."""
@@ -149,11 +159,14 @@ class PlaybackSession:
         self._deadline = self.transport.clock() + self._effective_playback_timeout()
 
         self.transport.send_queue_clear()
-        state, _, self._free_capacity = validate_buffer_status(
+        state, queued_count, free_capacity = validate_buffer_status(
             self.transport.await_frame(BUFFER_STATUS, timeout=self._remaining())
         )
         if state != MODE_ARMED:
             raise ProtocolError(f"QUEUE_CLEAR acknowledged in unexpected state {state}")
+        with self._progress_lock:
+            self._queued_count = queued_count
+            self._free_capacity = free_capacity
 
         prebuffer_count = self._prebuffer_count()
         if prebuffer_count > self._free_capacity:
@@ -166,11 +179,14 @@ class PlaybackSession:
         if self._next_event == len(self.events):
             self.transport.send_queue_end()
             self.transport.await_frame(PLAY_READY, timeout=self._remaining())
-            state, _, self._free_capacity = validate_buffer_status(
+            state, queued_count, free_capacity = validate_buffer_status(
                 self.transport.await_frame(BUFFER_STATUS, timeout=self._remaining())
             )
             if state != MODE_ARMED:
                 raise ProtocolError(f"QUEUE_END acknowledged in unexpected state {state}")
+            with self._progress_lock:
+                self._queued_count = queued_count
+                self._free_capacity = free_capacity
 
         self.transport.send_play_start()
         state, reason = validate_mode_changed(
@@ -183,6 +199,8 @@ class PlaybackSession:
         self.playback_start_us = validate_play_started(
             self.transport.await_frame(PLAY_STARTED, timeout=self._remaining())
         )
+        with self._progress_lock:
+            self._start_wallclock = self.transport.clock()
         self.started = True
         self.playing = True
         return self.playback_start_us
@@ -287,7 +305,9 @@ class PlaybackSession:
     def _send_through(self, stop: int, *, expected_state: int) -> None:
         while self._next_event < stop:
             if self._free_capacity == 0:
-                self._free_capacity = self._await_credit(expected_state)
+                free_capacity = self._await_credit(expected_state)
+                with self._progress_lock:
+                    self._free_capacity = free_capacity
             batch_count = min(
                 PIPELINE_WINDOW,
                 self._free_capacity,
@@ -301,15 +321,19 @@ class PlaybackSession:
             # Every accepted event has one ordered BUFFER_STATUS ack. Consume
             # the whole batch before opening the next command window.
             for _ in range(batch_count):
-                state, _, free_capacity = validate_buffer_status(
+                state, queued_count, free_capacity = validate_buffer_status(
                     self.transport.await_frame(BUFFER_STATUS, timeout=self._remaining())
                 )
                 if state != expected_state:
                     raise ProtocolError(
                         f"QUEUE_EVENT acknowledged in unexpected state {state}"
                     )
-                self._free_capacity = free_capacity
+                with self._progress_lock:
+                    self._queued_count = queued_count
+                    self._free_capacity = free_capacity
             self._next_event += batch_count
+            with self._progress_lock:
+                self._reported_next_event = self._next_event
 
     def _await_credit(self, expected_state: int) -> int:
         deferred: list[Frame] = []
@@ -319,17 +343,21 @@ class PlaybackSession:
                     self.transport.receive_frame(timeout=self._remaining())
                 )
                 if frame.message_type == BUFFER_STATUS:
-                    state, _, free_capacity = validate_buffer_status(frame)
+                    state, queued_count, free_capacity = validate_buffer_status(frame)
                     if state != expected_state:
                         raise ProtocolError(
                             f"BUFFER_STATUS has unexpected state {state}"
                         )
+                    with self._progress_lock:
+                        self._queued_count = queued_count
                     if free_capacity > 0:
                         return free_capacity
                     continue
                 if frame.message_type == PLAY_UNDERRUN:
                     elapsed, free_capacity = validate_play_underrun(frame)
                     self._underruns.append(UnderrunNotice(elapsed, free_capacity))
+                    with self._progress_lock:
+                        self._underrun_count = len(self._underruns)
                     if free_capacity > 0:
                         return free_capacity
                     continue
@@ -371,5 +399,45 @@ class PlaybackSession:
             if frame.message_type == PLAY_UNDERRUN:
                 elapsed, free_capacity = validate_play_underrun(frame)
                 self._underruns.append(UnderrunNotice(elapsed, free_capacity))
+                with self._progress_lock:
+                    self._underrun_count = len(self._underruns)
             elif frame.message_type == BUFFER_STATUS:
                 validate_buffer_status(frame)
+
+    def progress(self) -> dict[str, object]:
+        """Return a diagnostic-only snapshot for `Controller.status()`.
+
+        `elapsed_us_estimate` is a Zero-side wall-clock approximation of
+        playback position for a UI progress bar; it is never fed back into
+        scheduling and does not touch Pico timing decisions, so it does not
+        conflict with the Pico being the sole HID scheduler.
+        """
+        with self._progress_lock:
+            queued_count = self._queued_count
+            free_capacity = self._free_capacity
+            queued_events = self._reported_next_event
+            underrun_count = self._underrun_count
+            start_wallclock = self._start_wallclock
+
+        duration_us = self.events[-1][0] if self.events else 0
+        if start_wallclock is None:
+            elapsed_us_estimate = 0
+        else:
+            elapsed_us_estimate = max(
+                0,
+                min(
+                    round((self.transport.clock() - start_wallclock) * 1_000_000.0),
+                    duration_us,
+                ),
+            )
+
+        return {
+            "buffer": {"queued_count": queued_count, "free_capacity": free_capacity},
+            "playback": {
+                "queued_events": queued_events,
+                "total_events": len(self.events),
+                "underrun_count": underrun_count,
+                "elapsed_us_estimate": elapsed_us_estimate,
+                "duration_us": duration_us,
+            },
+        }

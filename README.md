@@ -89,7 +89,12 @@ python3 -m pip install -r requirements.txt
 ZERO_SERIAL_DEVICE=/dev/serial0 python3 -m uvicorn app.web:app --host 0.0.0.0 --port 8000
 ```
 
-- `GET /api/status` reports `PASS`/`RECORD`/`ARMED`/`PLAYING`/`ERROR`.
+- `GET /api/status` reports `PASS`/`RECORD`/`ARMED`/`PLAYING`/`ERROR`, plus a
+  `diagnostics` object (Pico buffer occupancy, and, while a session is
+  active, its live playback position/underrun counts or recorded event
+  count).
+- `GET /api/ws`: a WebSocket that periodically pushes the same status/
+  diagnostics payload, for the web UI's live updates.
 - `GET /api/recordings`, `GET /api/recordings/{name}/download`.
 - `POST /api/recordings/{name}/record`, `POST /api/record/stop`.
 - `POST /api/recordings/{name}/play` (body: `speed`, `prebuffer_ms`,
@@ -98,6 +103,12 @@ ZERO_SERIAL_DEVICE=/dev/serial0 python3 -m uvicorn app.web:app --host 0.0.0.0 --
   `DELETE /api/recordings/{name}` -- both reject the recording currently
   being recorded or played.
 - `POST /api/stop`: abort whatever is active and reconcile to PASS.
+
+A static single-page UI (`zero/static/`, no build step) is served at `/` by
+the same app: it drives every action above from a browser and shows the
+Pico/mode status, recordings list, and the live buffer/position diagnostics
+over that WebSocket, including a distinct visual treatment for `ERROR` and
+underrun states.
 
 On startup and shutdown the app reconciles the Pico to PASS with a
 CRC-checked `MODE_SET(PASS)` (never GPIO), covering a service restart while

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from .errors import ProtocolError, RecorderError, StorageError, TransportTimeout
 from .recording import Recording, RecordingBuilder, RecordingStore, validate_name
 from .transport import PicoTransport
@@ -19,6 +21,11 @@ class RecordingSession:
         self.builder = RecordingBuilder(name)
         self.started = False
         self.finished = False
+        # Guards _event_count, which receive_and_consume() (background
+        # worker thread) increments while progress() (a web request or
+        # WebSocket-push thread) reads it concurrently.
+        self._progress_lock = threading.Lock()
+        self._event_count = 0
 
     def start(self) -> None:
         if self.store.exists(self.name):
@@ -34,9 +41,16 @@ class RecordingSession:
         if frame.message_type == RECORD_EVENT:
             timestamp_us, report = validate_record_event(frame)
             self.builder.add(timestamp_us, report)
+            with self._progress_lock:
+                self._event_count += 1
         elif frame.message_type == MODE_CHANGED:
             raise ProtocolError("Pico mode changed unexpectedly while recording")
         # Other valid Pico status frames are diagnostic and cannot become events.
+
+    def progress(self) -> dict[str, object]:
+        with self._progress_lock:
+            event_count = self._event_count
+        return {"recording": {"event_count": event_count}}
 
     def stop(self) -> Recording:
         if self.finished:

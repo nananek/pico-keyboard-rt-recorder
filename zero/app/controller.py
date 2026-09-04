@@ -67,12 +67,16 @@ class Controller:
 
     def status(self) -> dict[str, object]:
         with self._meta_lock:
+            diagnostics: dict[str, object] = {"buffer": None, "playback": None, "recording": None}
+            if self._session is not None:
+                diagnostics.update(self._session.progress())
             return {
                 "state": self._state,
                 "active": self._active_kind if self._active_kind != "idle" else None,
                 "name": self._active_name,
                 "last_error": None if self._last_error is None else str(self._last_error),
                 "last_result": self._last_result,
+                "diagnostics": diagnostics,
             }
 
     # -- recording ----------------------------------------------------------
