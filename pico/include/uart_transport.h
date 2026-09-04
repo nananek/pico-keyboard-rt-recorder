@@ -46,6 +46,12 @@ typedef struct {
     // that arrives at the same instant.
     atomic_bool fault_pending;
     pico_uart_transport_stats_t stats;
+    // time_us_64() at the most recent byte pushed by the UART IRQ. Written
+    // only from pico_uart_transport_rx_push_isr; read from the main loop via
+    // pico_uart_transport_rx_idle_us to detect a silent link during playback
+    // (Issue #10). volatile for the same cross-context-visibility reason as
+    // rx_head/rx_tail above.
+    volatile uint64_t last_rx_us;
 } pico_uart_transport_t;
 
 void pico_uart_transport_init(pico_uart_transport_t *transport);
@@ -75,6 +81,13 @@ bool pico_uart_transport_pop_tx_byte(
 bool pico_uart_transport_take_fault(pico_uart_transport_t *transport);
 pico_uart_transport_stats_t pico_uart_transport_get_stats(
     const pico_uart_transport_t *transport);
+
+// Microseconds since the most recent byte was pushed by the UART IRQ, as of
+// now_us. Returns 0 if now_us has not yet caught up to last_rx_us (e.g. a
+// byte pushed between the caller's own now_us sample and this call), and 0
+// if transport is NULL. Pure query: does not itself change transport state.
+uint64_t pico_uart_transport_rx_idle_us(
+    const pico_uart_transport_t *transport, uint64_t now_us);
 
 void pico_uart_transport_hw_init(pico_uart_transport_t *transport);
 void pico_uart_transport_tx_task(pico_uart_transport_t *transport);

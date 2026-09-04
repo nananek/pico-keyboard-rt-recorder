@@ -39,6 +39,7 @@ build_and_run uart_protocol \
     "$test_root/uart_protocol_test.c"
 
 build_and_run uart_transport \
+    -I"$test_root/stubs" \
     "$test_root/../src/uart_protocol.c" \
     "$test_root/../src/uart_transport.c" \
     "$test_root/uart_transport_test.c"

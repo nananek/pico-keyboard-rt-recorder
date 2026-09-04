@@ -544,6 +544,57 @@ static void test_full_streaming_queue_grants_credit_after_first_pop(void) {
     CHECK(complete_calls == 0u);
 }
 
+static void test_watchdog_expired(void) {
+    pico_playback_queue_t queue;
+    pico_playback_scheduler_t scheduler;
+
+    reset_all();
+    send_ready = true;
+    pico_playback_queue_init(&queue);
+    init_scheduler(&scheduler, &queue);
+
+    // (a) A scheduler that has never entered an underrun is never expired,
+    // regardless of how far now_us is advanced.
+    CHECK(!pico_playback_scheduler_watchdog_expired(&scheduler, 0u));
+    CHECK(!pico_playback_scheduler_watchdog_expired(&scheduler, 10000000u));
+
+    const uint64_t epoch = 1000000u;
+    fake_timestamp_us = epoch;
+    // Starting with an empty, not-yet-ended sequence enters underrun
+    // immediately (arm_next() inside start() finds nothing to peek), the
+    // same leading edge test_streaming_underrun_resumes_without_shifting_deadline
+    // exercises via its first task() call, just without an initial queued
+    // event.
+    pico_playback_scheduler_start(&scheduler, epoch);
+    CHECK(underrun_calls == 1u);
+    CHECK(pico_playback_scheduler_is_running(&scheduler));
+
+    // (b) Below the timeout: not yet expired.
+    CHECK(!pico_playback_scheduler_watchdog_expired(
+        &scheduler,
+        epoch + PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US - 1u));
+
+    // (c) At/over the timeout: expired.
+    CHECK(pico_playback_scheduler_watchdog_expired(
+        &scheduler, epoch + PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US));
+    CHECK(pico_playback_scheduler_watchdog_expired(
+        &scheduler,
+        epoch + PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US + 1000000u));
+
+    // (d) A newly arriving event clears underrun_active (arm_next() peeks it
+    // successfully), so the watchdog no longer reports expired for the same
+    // now_us that just tripped it above. The second event's far-future
+    // deadline keeps the queue non-empty after the first is dispatched, so
+    // this is a clean "underrun cleared", not an immediate re-underrun.
+    push_event(&queue, 0u, 9u);
+    push_event(&queue, 50000000u, 10u);
+    fake_timestamp_us = epoch + PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US + 1000u;
+    pico_playback_scheduler_task(&scheduler);
+    CHECK(sent_count == 1u && sent_reports[0].keycode[0] == 9u);
+    CHECK(pico_playback_scheduler_is_running(&scheduler));
+    CHECK(!pico_playback_scheduler_watchdog_expired(&scheduler, fake_timestamp_us));
+}
+
 int main(void) {
     test_normal_order_and_deadlines();
     test_late_run_does_not_shift_later_deadlines();
@@ -554,5 +605,6 @@ int main(void) {
     test_samples_truncated_beyond_capacity();
     test_streaming_underrun_resumes_without_shifting_deadline();
     test_full_streaming_queue_grants_credit_after_first_pop();
+    test_watchdog_expired();
     return failures == 0 ? 0 : 1;
 }

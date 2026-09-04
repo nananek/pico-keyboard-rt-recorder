@@ -97,9 +97,10 @@ static void begin_underrun(pico_playback_scheduler_t *scheduler) {
     if (scheduler->underrun_active) {
         return;
     }
-    scheduler->underrun_active = true;
-    ++scheduler->underrun_count;
     const uint64_t now_us = time_us_64();
+    scheduler->underrun_active = true;
+    scheduler->underrun_since_us = now_us;
+    ++scheduler->underrun_count;
     const uint64_t elapsed_offset_us = now_us >= scheduler->playback_start_us
         ? now_us - scheduler->playback_start_us
         : 0u;
@@ -288,4 +289,12 @@ void pico_playback_scheduler_task(pico_playback_scheduler_t *scheduler) {
 bool pico_playback_scheduler_is_running(
     const pico_playback_scheduler_t *scheduler) {
     return scheduler != NULL && scheduler->running;
+}
+
+bool pico_playback_scheduler_watchdog_expired(
+    const pico_playback_scheduler_t *scheduler, uint64_t now_us) {
+    return scheduler != NULL && scheduler->underrun_active &&
+           now_us >= scheduler->underrun_since_us &&
+           (now_us - scheduler->underrun_since_us) >=
+               PICO_PLAYBACK_SCHEDULER_WATCHDOG_TIMEOUT_US;
 }
