@@ -15,6 +15,12 @@ enum {
     // Fixed, changed in lockstep with the Zero's --baud/ZERO_SERIAL_BAUD
     // defaults (see docs/protocol.md); not negotiated over the wire.
     PICO_KEYBOARD_UART_BAUD = 921600u,
+    // RECORD-mode main-loop sleep (Issue #26), tightened from the default
+    // 1ms to bound this codebase's own scheduling jitter contribution to
+    // captured RECORD_EVENT timestamps; see docs/realtime-design.md's
+    // "Clock configuration and timing accuracy" section for the trade-off
+    // reasoning against a full busy-loop.
+    PICO_RECORD_LOOP_INTERVAL_US = 200u,
 };
 
 #if defined(__cplusplus)

@@ -437,11 +437,18 @@ int main(void) {
         pico_playback_test_source_task();
 #endif
         // PLAYING needs sub-millisecond scheduling precision, so it busy-polls
-        // instead of sleeping; every other state keeps the previous 1 ms
-        // sleep. This trades 100% CPU usage during playback for the <1 ms
-        // lateness target (see docs/realtime-design.md).
-        if (pico_mode_state_get(&mode_state) == PICO_UART_MODE_PLAYING) {
+        // instead of sleeping. RECORD tightens its sleep instead of also
+        // busy-polling: capture duration is user-controlled and can run far
+        // longer than a bounded PLAYING run, so an unbounded full-CPU/power
+        // cost isn't warranted there, but the shorter sleep still bounds the
+        // dispatch jitter this loop itself adds to captured RECORD_EVENT
+        // timestamps. Every other state keeps the previous 1 ms sleep. See
+        // docs/realtime-design.md for the full trade-off reasoning.
+        const uint8_t loop_mode = pico_mode_state_get(&mode_state);
+        if (loop_mode == PICO_UART_MODE_PLAYING) {
             tight_loop_contents();
+        } else if (loop_mode == PICO_UART_MODE_RECORD) {
+            sleep_us(PICO_RECORD_LOOP_INTERVAL_US);
         } else {
             sleep_ms(1u);
         }
