@@ -76,6 +76,37 @@ Normal completion and Ctrl-C abort both consume playback metrics and return to
 PASS before closing the serial port. Use `--speed` to scale offsets and
 `--prebuffer-ms` to request a larger initial reserve.
 
+## Zero web API and service lifecycle
+
+`zero/app/web.py` exposes the same recording/playback machinery over HTTP
+with FastAPI, for the web UI and for headless control. `zero/app/controller.py`
+owns the one persistent `PicoTransport` and enforces at most one active
+recording or playback session:
+
+```sh
+cd zero
+python3 -m pip install -r requirements.txt
+ZERO_SERIAL_DEVICE=/dev/serial0 python3 -m uvicorn app.web:app --host 0.0.0.0 --port 8000
+```
+
+- `GET /api/status` reports `PASS`/`RECORD`/`ARMED`/`PLAYING`/`ERROR`.
+- `GET /api/recordings`, `GET /api/recordings/{name}/download`.
+- `POST /api/recordings/{name}/record`, `POST /api/record/stop`.
+- `POST /api/recordings/{name}/play` (body: `speed`, `prebuffer_ms`,
+  `playback_timeout`), `POST /api/playback/stop`.
+- `POST /api/recordings/{name}/rename` (body: `new_name`),
+  `DELETE /api/recordings/{name}` -- both reject the recording currently
+  being recorded or played.
+- `POST /api/stop`: abort whatever is active and reconcile to PASS.
+
+On startup and shutdown the app reconciles the Pico to PASS with a
+CRC-checked `MODE_SET(PASS)` (never GPIO), covering a service restart while
+the Pico is still ARMED/RECORD/PLAYING. A `stop`/shutdown request while a
+playback is mid-stream interrupts it cooperatively (`PicoTransport.cancel_event`)
+rather than waiting for it to finish naturally. `zero/systemd/pico-keyboard-recorder.service`
+runs this under systemd with `Restart=on-failure`, forwarding `SIGTERM` into
+the same shutdown reconciliation.
+
 The optional `PICO_HID_DEMO_TEST=ON` build sends one safe A press/release after
 device enumeration. The normal firmware is UART-enabled and has no textual
 capture diagnostic.
@@ -97,7 +128,8 @@ docker build --target verify --tag pico-keyboard-verify .
 Connect the physical keyboard to the protected 5 V/VBUS path described in
 [docs/wiring.md](docs/wiring.md). Cross UART TX/RX between Pico and Zero and
 share ground; do not connect a mode wire. Follow [docs/testing.md](docs/testing.md)
-for protocol, pass-through, recording, and fault-injection checks.
+for protocol, pass-through, recording, fault-injection, and web API/service
+lifecycle checks.
 
 ## License
 

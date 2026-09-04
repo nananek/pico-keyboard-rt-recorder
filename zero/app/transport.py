@@ -47,6 +47,11 @@ class PicoTransport:
         self.read_size = read_size
         self.decoder = IncrementalDecoder()
         self._pending: deque[Frame] = deque()
+        # Optional cooperative-cancellation hook: a controller running a
+        # session's blocking receive loop on a background thread sets this to
+        # abort a long wait (e.g. mid-playback) without another thread
+        # touching the stream. None (the default) never affects behavior.
+        self.cancel_event = None
 
     def set_mode(self, target_mode: int, *, timeout: float, retries: int = 1) -> None:
         if target_mode not in (0, 1, 2):
@@ -149,6 +154,8 @@ class PicoTransport:
             return self._pending.popleft()
         deadline = self.clock() + timeout
         while True:
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                raise TransportTimeout("cancelled")
             try:
                 data = self.stream.read(self.read_size)
             except OSError as error:
