@@ -5,8 +5,8 @@ the mode state. UART0 RX uses a bounded single-producer/single-consumer byte
 ring. The interrupt handler drains the FIFO, counts framing/parity/overrun
 errors, and returns; it never blocks, allocates, invokes TinyUSB, or sends HID.
 Ring overflow and hardware errors are latched for main-loop handling.
-The ring holds 256 bytes: more than three maximum-size 71-byte frames and
-about 5.5 ms of continuous 460800-baud 8-N-1 input, while the main loop's
+The ring holds 512 bytes: more than seven maximum-size 71-byte frames and
+about 5.5 ms of continuous 921600-baud 8-N-1 input, while the main loop's
 normal sleep interval is 1 ms.
 
 Startup is safe by construction, with no separate hardware watchdog

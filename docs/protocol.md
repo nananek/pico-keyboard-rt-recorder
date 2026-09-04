@@ -1,6 +1,6 @@
 # UART protocol (version 2)
 
-The Pico 2 and Pi Zero 2 W communicate over UART0 at 460800 baud, 8-N-1.
+The Pico 2 and Pi Zero 2 W communicate over UART0 at 921600 baud, 8-N-1.
 Pico UART0 TX is GP0 and RX is GP1. The mode is controlled only by framed UART
 commands; there is no separate mode-control wire.
 
