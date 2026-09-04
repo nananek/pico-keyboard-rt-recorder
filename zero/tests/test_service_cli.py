@@ -1,9 +1,13 @@
 import contextlib
 import io
+from pathlib import Path
 import struct
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import cli
 from app.errors import ModeRejected, PicoError, ProtocolError, RecorderError, TransportTimeout
