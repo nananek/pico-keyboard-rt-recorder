@@ -96,21 +96,21 @@ max=5051us, and that outlier is a known, accepted, event-0-only artifact
 rather than a scheduling defect: `PLAY_START` handling calls
 `pico_mode_state_play_start` (`pico/src/mode_state.c`), which sends the
 ARMED->PLAYING transition's mandatory all-keys-release report (the same
-blanket per-transition release documented above), and then, in that same
-main-loop iteration, starts the scheduler, whose own first dispatch targets
-event 0 (offset always 0) on that same single-buffered native HID IN
-endpoint. The release is sent first in program order, so it wins the
-endpoint; the scheduler's first `send_report` call then finds it not-ready
-and falls into its ordinary HID-busy retry -- the same generic retry path
-any busy-endpoint dispatch already uses, not special-cased logic. That retry
-is bounded by the next actual USB host poll of the endpoint, i.e. by the HID
-descriptor's `bInterval=10` (`pico/src/usb_descriptors.c`), not by
-main-loop speed (PLAYING already runs `tight_loop_contents()`); a collision
-at random phase within a 10 ms polling window averages ~5 ms, matching the
-measured 5051us. Events 2+ have no such collision and dispatch with the
-scheduler's normal sub-20us precision, so `max_lateness_us` alone is not a
-reliable proxy for steady-state real-time quality on a run that includes
-this artifact -- `p95`/`p99`/`min` are.
+blanket per-transition release documented above); the same command handler
+then calls `pico_playback_scheduler_start` in that same main-loop iteration,
+and its first dispatch targets event 0 (offset always 0) on that same
+single-buffered native HID IN endpoint. The release is sent first in
+program order, so it wins the endpoint; the scheduler's first `send_report`
+call then finds it not-ready and falls into its ordinary HID-busy retry --
+the same generic retry path any busy-endpoint dispatch already uses, not
+special-cased logic. That retry is bounded by the next actual USB host poll
+of the endpoint, i.e. by the HID descriptor's `bInterval=10`
+(`pico/src/usb_descriptors.c`), not by main-loop speed (PLAYING already runs
+`tight_loop_contents()`); a collision at random phase within a 10 ms polling
+window averages ~5 ms, matching the measured 5051us. Events 1+ have no such
+collision and dispatch with the scheduler's normal sub-20us precision, so
+`max_lateness_us` alone is not a reliable proxy for steady-state real-time
+quality on a run that includes this artifact -- `p95`/`p99`/`min` are.
 
 Two fixes were considered and rejected. Skipping the release specifically on
 the ARMED->PLAYING transition is, in fact, provably redundant today (ARMED
