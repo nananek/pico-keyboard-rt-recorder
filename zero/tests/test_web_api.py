@@ -419,6 +419,30 @@ class ControllerConcurrencyTests(unittest.TestCase):
             stop_thread.join(timeout=5.0)
             self.assertFalse(stop_thread.is_alive())
 
+    def test_invalid_name_after_error_state_does_not_mask_it_as_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stream = LiveStream()
+            transport = PicoTransport(stream)
+            controller = Controller(
+                transport, RecordingStore(directory), mode_timeout=0.05, record_poll_interval=0.02
+            )
+
+            # Drive the controller into STATE_ERROR: the RECORD handshake is
+            # rejected, and the cleanup MODE_SET(PASS) never gets an ack
+            # either, so abort() itself fails.
+            stream.push(mode_changed(MODE_PASS, 1))  # Pico rejects MODE_SET(RECORD)
+            with self.assertRaises(RecorderError):
+                controller.start_recording("hello")
+            self.assertEqual(controller.status()["state"], "ERROR")
+
+            # An invalid name must fail before _begin() ever claims
+            # active_kind, i.e. before touching the transport at all -- it
+            # must not silently report the controller back to PASS with no
+            # handshake behind that claim.
+            with self.assertRaises(RecorderError):
+                controller.start_recording("../escape")
+            self.assertEqual(controller.status()["state"], "ERROR")
+
 
 if __name__ == "__main__":
     unittest.main()

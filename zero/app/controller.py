@@ -16,7 +16,7 @@ import threading
 
 from .errors import RecorderError, StorageError, TransportTimeout
 from .playback import PlaybackSession
-from .recording import RecordingStore
+from .recording import RecordingStore, validate_name
 from .service import RecordingSession
 from .transport import PicoTransport
 from .uart_protocol import MODE_PASS
@@ -78,6 +78,12 @@ class Controller:
     # -- recording ----------------------------------------------------------
 
     def start_recording(self, name: str) -> dict[str, object]:
+        # Validate before _begin() claims active_kind: an invalid name never
+        # reaches the transport, so _begin()'s failure path would otherwise
+        # report a bare STATE_PASS with no real handshake behind it,
+        # potentially masking a genuine prior STATE_ERROR. start_playback
+        # gets this for free from store.load(name) running before _begin().
+        validate_name(name)
         self._begin("record", name)
         session: RecordingSession | None = None
         try:
