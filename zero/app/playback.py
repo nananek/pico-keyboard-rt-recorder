@@ -305,7 +305,9 @@ class PlaybackSession:
     def _send_through(self, stop: int, *, expected_state: int) -> None:
         while self._next_event < stop:
             if self._free_capacity == 0:
-                self._free_capacity = self._await_credit(expected_state)
+                free_capacity = self._await_credit(expected_state)
+                with self._progress_lock:
+                    self._free_capacity = free_capacity
             batch_count = min(
                 PIPELINE_WINDOW,
                 self._free_capacity,
@@ -326,7 +328,6 @@ class PlaybackSession:
                     raise ProtocolError(
                         f"QUEUE_EVENT acknowledged in unexpected state {state}"
                     )
-                self._free_capacity = free_capacity
                 with self._progress_lock:
                     self._queued_count = queued_count
                     self._free_capacity = free_capacity
