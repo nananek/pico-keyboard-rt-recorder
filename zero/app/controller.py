@@ -188,7 +188,12 @@ class Controller:
         except TransportTimeout as error:
             self.transport.cancel_event = None
             if not stop_event.is_set():
-                self._end(state=STATE_ERROR, error=error)
+                # A genuine playback_timeout expiry, not a stop request:
+                # still attempt best-effort cleanup so the Pico is not left
+                # ARMED/PLAYING with a key possibly held (mirrors the CLI's
+                # `finally: session.abort_best_effort()`).
+                cleanup_error = session.abort_best_effort()
+                self._end(state=STATE_ERROR if cleanup_error is not None else STATE_PASS, error=error)
                 return
             try:
                 aborted = session.abort(return_to_pass=True)
@@ -208,20 +213,19 @@ class Controller:
     # -- recording management -------------------------------------------
 
     def rename_recording(self, old: str, new: str) -> None:
-        if old == self._active_recording_name():
-            raise StorageError(f"cannot rename recording while it is active: {old}")
-        self.store.rename(old, new)
+        # Held for the whole check-then-act: otherwise a start_recording/
+        # start_playback for `old` could slip in between the active check
+        # and the file operation.
+        with self._meta_lock:
+            if self._active_kind in ("record", "playback") and self._active_name == old:
+                raise StorageError(f"cannot rename recording while it is active: {old}")
+            self.store.rename(old, new)
 
     def delete_recording(self, name: str) -> None:
-        if name == self._active_recording_name():
-            raise StorageError(f"cannot delete recording while it is active: {name}")
-        self.store.delete(name)
-
-    def _active_recording_name(self) -> str | None:
         with self._meta_lock:
-            if self._active_kind in ("record", "playback"):
-                return self._active_name
-            return None
+            if self._active_kind in ("record", "playback") and self._active_name == name:
+                raise StorageError(f"cannot delete recording while it is active: {name}")
+            self.store.delete(name)
 
     # -- shutdown / safety -------------------------------------------------
 
