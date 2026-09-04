@@ -35,7 +35,7 @@ from .transport import PicoTransport
 
 DEFAULT_RECORDINGS_DIR = Path(__file__).resolve().parents[1] / "recordings"
 DEFAULT_DEVICE = os.environ.get("ZERO_SERIAL_DEVICE", "/dev/serial0")
-DEFAULT_BAUD = int(os.environ.get("ZERO_SERIAL_BAUD", "460800"))
+DEFAULT_BAUD = int(os.environ.get("ZERO_SERIAL_BAUD", "921600"))
 DEFAULT_MODE_TIMEOUT = float(os.environ.get("ZERO_MODE_TIMEOUT", "2.0"))
 
 

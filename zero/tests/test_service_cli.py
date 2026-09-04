@@ -321,6 +321,15 @@ class ServiceAndCliTests(unittest.TestCase):
             self.assertEqual([event.dt_us for event in stored.events], [0, 20])
         self.assertTrue(stream.closed)
 
+    def test_cli_baud_default_matches_pico_firmware_uart_baud(self):
+        # Pinned so a partial edit of the fixed, lockstep-changed baud (see
+        # docs/protocol.md and pico/include/hardware_config.h's
+        # PICO_KEYBOARD_UART_BAUD) is caught here instead of only surfacing
+        # as a silent mismatch against real hardware.
+        parser = cli.build_parser()
+        args = parser.parse_args(["record", "hello", "--device", "fake"])
+        self.assertEqual(args.baud, 921600)
+
     def test_cli_rejects_invalid_name_before_opening_serial(self):
         with patch("app.cli._open_transport") as open_transport:
             stderr = io.StringIO()

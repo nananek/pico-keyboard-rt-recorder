@@ -7,7 +7,7 @@ report timestamps, pass-through, playback queue, USB output, and safety state.
 The Pi Zero 2 W stores recordings, prepares absolute future offsets, feeds the
 queue, and presents the control UI. The Zero never supplies a playback clock.
 
-The only control link is framed binary UART0 (Pico GP0 TX / GP1 RX, 460800
+The only control link is framed binary UART0 (Pico GP0 TX / GP1 RX, 921600
 8-N-1). Mode selection is a `MODE_SET (0x87)` command; no GPIO gate is used.
 
 ## Data flow

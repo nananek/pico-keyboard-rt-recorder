@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _add_serial_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", required=True, help="serial device, for example /dev/serial0")
-    parser.add_argument("--baud", type=int, default=460800)
+    parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument("--mode-timeout", type=float, default=2.0)
 
 

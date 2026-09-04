@@ -267,3 +267,36 @@ checked against the Pico hardware timer.
    report and a final `MODE_CHANGED(PASS, OK)` are observed before the
    process exits, and that `systemctl restart` afterward again settles on
    PASS per step 1/2.
+
+## UART baud rate (921600) acceptance
+
+Raising UART0 above 460800 (issue #23) is only validated by the host-side
+checks above (parser/framing/CRC logic, ring-capacity math) plus the
+compile-time static assert in `pico/include/hardware_config.h` tying the RX
+ring to the configured baud. None of that confirms the physical link holds
+up at the new rate; do this manually before treating the change as done:
+
+1. Confirm which physical UART backs `/dev/serial0` on the target Zero 2 W
+   image (full PL011 vs. the BCM's mini-UART) -- e.g. via
+   `raspi-gpio`/`dtoverlay` config or the kernel's UART aliasing. If it's the
+   mini-UART, confirm `core_freq`/`core_freq_min` is pinned in `config.txt`
+   so its baud divisor (which is derived from the VPU clock, not a fixed
+   UART clock) is accurate at a non-standard rate. This is a prerequisite
+   for reliable timing at any rate above the defaults, not specific to
+   921600.
+2. Flash the updated firmware and re-run the pass-through, RECORD, and
+   playback hardware-acceptance steps above end to end at 921600. Confirm no
+   framing errors, CRC failures, or unexpected `ERROR` transitions appear
+   that did not also appear at 460800.
+3. Run a sustained/high-rate stress case -- a long recording played back at
+   an elevated `--speed`, or a dense rapid-keypress burst during RECORD --
+   and confirm the `PICO_STATUS` fault counters (`rx_overflow`,
+   `hardware_errors`, `tx_dropped`; see `docs/protocol.md`) stay at zero
+   throughout. This is the hardware-side confirmation that the doubled
+   RX/TX ring capacities actually cover the new byte rate.
+4. If practical, measure the Pico's actual `clk_peri` (e.g. a debug print of
+   `clock_get_hz(clk_peri)` during bring-up) and record the value in the
+   issue/PR thread. This closes the "which clock, and how much divisor
+   error" unknown this plan's software-side analysis had to assume across a
+   range of plausible values, and gives a concrete baseline for any future
+   baud increase.

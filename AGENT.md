@@ -6,7 +6,7 @@ The Raspberry Pi Pico 2 is the real-time engine: it owns USB host/device,
 receive-boundary timestamps, pass-through, playback scheduling, and safety
 state. The Raspberry Pi Zero 2 W stores recordings, prepares future events,
 feeds the queue, and controls the UI. The boundary is framed binary UART0
-(Pico GP0 TX / GP1 RX, 460800 baud, 8-N-1); mode is never selected by GPIO.
+(Pico GP0 TX / GP1 RX, 921600 baud, 8-N-1); mode is never selected by GPIO.
 
 ## Non-negotiable real-time rules
 

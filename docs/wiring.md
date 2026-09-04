@@ -10,8 +10,11 @@ The firmware pin assignments are deliberately narrow and non-overlapping:
 | PIO-USB D- | GP13 |
 
 Connect UART as a crossed 3.3 V TTL link (Pico GP0 → Zero RX, Zero TX → Pico
-GP1) and connect grounds. UART is 460800 baud, 8-N-1. There is intentionally
-no additional mode GPIO or Zero-side control wire.
+GP1) and connect grounds. UART is 921600 baud, 8-N-1. There is intentionally
+no additional mode GPIO or Zero-side control wire. Keep the UART leads short
+(a few cm to a couple of inches): above the original 460800 baud, the link
+has less margin against cable capacitance and ground quality, and no
+alternate wiring path has been validated to tolerate a longer run.
 
 The native Pico USB connector is the HID device presented to the PC. Attach the
 physical keyboard to the PIO-USB host connector with a protected, current-

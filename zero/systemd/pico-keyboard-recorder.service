@@ -9,7 +9,7 @@ Type=simple
 WorkingDirectory=/opt/pico-keyboard-rt-recorder/zero
 ExecStart=/usr/bin/python3 -m uvicorn app.web:app --host 0.0.0.0 --port 8000
 Environment=ZERO_SERIAL_DEVICE=/dev/serial0
-Environment=ZERO_SERIAL_BAUD=460800
+Environment=ZERO_SERIAL_BAUD=921600
 
 # uvicorn forwards SIGTERM into FastAPI's lifespan shutdown, which runs
 # Controller.safe_stop() to abort any active session and reconcile the Pico
