@@ -77,8 +77,8 @@ per Issue #26:
   it is the wrong quantity to compare directly against the RECORD-mode
   jitter bound above (a per-event, non-cumulative noise term): for a
   typical few-millisecond to few-hundred-millisecond gap between two
-  consecutively captured events, 60 ppm contributes only tens of
-  nanoseconds to a few microseconds of extra `dt_us` error -- one to four
+  consecutively captured events, 60 ppm contributes roughly a hundred
+  nanoseconds to a few tens of microseconds of extra `dt_us` error -- one to four
   orders of magnitude below the jitter bound for realistic inter-keystroke
   intervals, only approaching the same order of magnitude for an atypical
   gap near a full second. Crystal drift is not a meaningful contributor to
